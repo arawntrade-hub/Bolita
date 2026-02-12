@@ -1,8 +1,4 @@
-// ==============================
-// bot.js - Bot de Telegram para Rifas Cuba
-// Exporta el bot listo para ser lanzado desde backend.js
-// ==============================
-
+// bot.js - Bot de Telegram, exportado para backend.js
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const { message } = require('telegraf/filters');
@@ -27,9 +23,10 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 // ========== INICIALIZAR BOT ==========
 const bot = new Telegraf(BOT_TOKEN);
 
-// ✅ SESIÓN LOCAL – CORREGIDA (se elimina 'storage: "file"' porque no es un constructor)
+// Sesión local - CORREGIDO
 const localSession = new LocalSession({ 
-  database: 'session_db.json'
+  database: 'session_db.json',
+  storage: 'file'
 });
 bot.use(localSession.middleware());
 
@@ -657,6 +654,9 @@ bot.on(message('text'), async (ctx) => {
         if (error) await ctx.reply(`❌ Error: ${error.message}`);
         else await ctx.reply(`✅ Método de depósito *${session.adminTempName}* añadido con ID ${data.id}.`, { parse_mode: 'Markdown' });
         delete session.adminAction;
+        delete session.adminStep;
+        delete session.adminTempName;
+        delete session.adminTempCard;
         return;
       }
     }
@@ -682,6 +682,9 @@ bot.on(message('text'), async (ctx) => {
         else await ctx.reply(`✅ Método de depósito ID ${id} actualizado.`);
         delete session.adminAction;
         delete session.editId;
+        delete session.adminStep;
+        delete session.adminTempName;
+        delete session.adminTempCard;
         return;
       }
     }
@@ -706,6 +709,9 @@ bot.on(message('text'), async (ctx) => {
         if (error) await ctx.reply(`❌ Error: ${error.message}`);
         else await ctx.reply(`✅ Método de retiro *${session.adminTempName}* añadido con ID ${data.id}.`, { parse_mode: 'Markdown' });
         delete session.adminAction;
+        delete session.adminStep;
+        delete session.adminTempName;
+        delete session.adminTempCard;
         return;
       }
     }
@@ -731,6 +737,9 @@ bot.on(message('text'), async (ctx) => {
         else await ctx.reply(`✅ Método de retiro ID ${id} actualizado.`);
         delete session.adminAction;
         delete session.editId;
+        delete session.adminStep;
+        delete session.adminTempName;
+        delete session.adminTempCard;
         return;
       }
     }
@@ -789,6 +798,7 @@ bot.on(message('text'), async (ctx) => {
         delete session.adminAction;
         delete session.tempLottery;
         delete session.tempDate;
+        delete session.adminStep;
         return;
       }
     }
@@ -820,6 +830,7 @@ bot.on(message('text'), async (ctx) => {
         delete session.tempLottery;
         delete session.tempDate;
         delete session.tempTimeSlot;
+        delete session.adminStep;
         return;
       }
     }
