@@ -1026,3 +1026,14 @@ app.listen(PORT, () => {
 });
 
 module.exports = app;
+
+// ========== INICIAR BOT DE TELEGRAM ==========
+const bot = require('./bot'); // Importar el bot
+
+bot.launch()
+  .then(() => console.log('🤖 Bot de Telegram iniciado correctamente'))
+  .catch(err => console.error('❌ Error al iniciar el bot:', err));
+
+// Graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
