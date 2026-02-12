@@ -1,13 +1,24 @@
 {
   "name": "rifas-cuba",
   "version": "2.0.0",
-  "description": "Bot de Telegram + WebApp para rifas y apuestas",
+  "description": "Bot de Telegram + WebApp para rifas y apuestas, con Supabase y panel de administración",
   "main": "backend.js",
   "scripts": {
     "start": "node backend.js",
     "dev": "nodemon backend.js",
-    "bot": "node bot.js"
+    "bot": "node bot.js",
+    "bot:dev": "nodemon bot.js"
   },
+  "keywords": [
+    "telegram",
+    "bot",
+    "webapp",
+    "rifas",
+    "apuestas",
+    "supabase"
+  ],
+  "author": "Tu Nombre o Empresa",
+  "license": "ISC",
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
     "axios": "^1.6.0",
@@ -22,7 +33,7 @@
   "devDependencies": {
     "nodemon": "^3.0.2"
   },
-  "keywords": ["telegram", "bot", "webapp", "rifas", "supabase"],
-  "author": "Tu Nombre",
-  "license": "ISC"
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
