@@ -6,7 +6,7 @@
 require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const { message } = require('telegraf/filters');
-const { LocalSession } = require('telegraf-session-local');
+const LocalSession = require('telegraf-session-local'); // ✅ CORREGIDO
 const { createClient } = require('@supabase/supabase-js');
 const crypto = require('crypto');
 const axios = require('axios');
@@ -27,7 +27,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 // ========== INICIALIZAR BOT ==========
 const bot = new Telegraf(BOT_TOKEN);
 
-// Sesión local
+// Sesión local - CORREGIDO
 const localSession = new LocalSession({ 
   database: 'session_db.json',
   storage: 'file'
