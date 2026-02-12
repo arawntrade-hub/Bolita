@@ -1402,15 +1402,15 @@ async function getExchangeRate() {
 }
 
 // ========== LANZAR BOT ==========
-bot.launch()
-  .then(() => {
-    console.log('🤖 Bot de Rifas iniciado correctamente');
-    console.log(`Admin ID: ${ADMIN_ID}`);
-    console.log(`Canal de admin: ${ADMIN_CHANNEL}`);
-  })
-  .catch(err => {
-    console.error('Error al iniciar el bot:', err);
-  });
+//bot.launch()
+  //.then(() => {
+   // console.log('🤖 Bot de Rifas iniciado correctamente');
+  //  console.log(`Admin ID: ${ADMIN_ID}`);
+ //   console.log(`Canal de admin: ${ADMIN_CHANNEL}`);
+ // })
+//  .catch(err => {
+  //  console.error('Error al iniciar el bot:', err);
+ // });
 
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
