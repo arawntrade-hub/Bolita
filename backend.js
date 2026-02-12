@@ -265,45 +265,26 @@ app.post('/api/transfer', async (req, res) => {
   res.json({ success: true });
 });
 
-// ========== ENDPOINTS DE ADMIN ==========
+// ========== ENDPOINTS DE ADMIN (simplificados: solo añadir y ver) ==========
 app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
   const { name, card, confirm } = req.body;
   const { data } = await supabase.from('deposit_methods').insert({ name, card, confirm }).select().single();
   res.json(data);
 });
-app.put('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { name, card, confirm } = req.body;
-  const { data } = await supabase.from('deposit_methods').update({ name, card, confirm }).eq('id', id).select().single();
-  res.json(data);
-});
-app.delete('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  await supabase.from('deposit_methods').delete().eq('id', id);
-  res.json({ success: true });
-});
+
 app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
   const { name, card, confirm } = req.body;
   const { data } = await supabase.from('withdraw_methods').insert({ name, card, confirm }).select().single();
   res.json(data);
 });
-app.put('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { name, card, confirm } = req.body;
-  const { data } = await supabase.from('withdraw_methods').update({ name, card, confirm }).eq('id', id).select().single();
-  res.json(data);
-});
-app.delete('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  await supabase.from('withdraw_methods').delete().eq('id', id);
-  res.json({ success: true });
-});
+
 app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
   const { rate } = req.body;
   if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
   await supabase.from('exchange_rate').update({ rate, updated_at: new Date() }).eq('id', 1);
   res.json({ success: true, rate });
 });
+
 app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
   const { betType } = req.params;
   const { amount_cup, amount_usd } = req.body;
@@ -311,103 +292,29 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
   await supabase.from('play_prices').update({ amount_cup, amount_usd, updated_at: new Date() }).eq('bet_type', betType);
   res.json({ success: true });
 });
-app.get('/api/admin/pending-deposits', requireAdmin, async (req, res) => {
-  const { data } = await supabase
-    .from('deposit_requests')
-    .select('*, users(first_name, telegram_id), deposit_methods(name)')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
+
+// Endpoints para lotería
+app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
+  const { lottery, date, time_slot, end_time } = req.body;
+  const { data } = await supabase.from('lottery_sessions').insert({ lottery, date, time_slot, status: 'open', end_time }).select().single();
   res.json(data);
-});
-app.post('/api/admin/approve-deposit/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { amount_usd, bonus_usd } = req.body;
-  if (!amount_usd || amount_usd <= 0) return res.status(400).json({ error: 'Monto inválido' });
-  const { data: request } = await supabase.from('deposit_requests').select('*').eq('id', id).single();
-  if (!request) return res.status(404).json({ error: 'Solicitud no encontrada' });
-  const { data: user } = await supabase.from('users').select('usd, bonus_usd').eq('telegram_id', request.user_id).single();
-  await supabase.from('users').update({
-    usd: parseFloat(user.usd) + parseFloat(amount_usd),
-    bonus_usd: parseFloat(user.bonus_usd) + (parseFloat(bonus_usd) || 0),
-    updated_at: new Date()
-  }).eq('telegram_id', request.user_id);
-  await supabase.from('deposit_requests').update({ status: 'approved', amount: amount_usd, currency: 'USD', updated_at: new Date() }).eq('id', id);
-  try {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: request.user_id,
-      text: `✅ *Depósito aprobado*\nSe ha acreditado *${amount_usd} USD* a tu saldo.\n🎁 Bonus: +${bonus_usd || 0} USD`,
-      parse_mode: 'Markdown'
-    });
-  } catch (e) {}
-  res.json({ success: true });
-});
-app.post('/api/admin/reject-deposit/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  await supabase.from('deposit_requests').update({ status: 'rejected', updated_at: new Date() }).eq('id', id);
-  const { data: request } = await supabase.from('deposit_requests').select('user_id').eq('id', id).single();
-  if (request) {
-    try {
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        chat_id: request.user_id,
-        text: '❌ *Depósito rechazado*\nTu solicitud no pudo ser procesada.',
-        parse_mode: 'Markdown'
-      });
-    } catch (e) {}
-  }
-  res.json({ success: true });
-});
-app.get('/api/admin/pending-withdraws', requireAdmin, async (req, res) => {
-  const { data } = await supabase
-    .from('withdraw_requests')
-    .select('*, users(first_name, telegram_id), withdraw_methods(name)')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
-  res.json(data);
-});
-app.post('/api/admin/approve-withdraw/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  const { data: request } = await supabase.from('withdraw_requests').select('*').eq('id', id).single();
-  if (!request) return res.status(404).json({ error: 'Solicitud no encontrada' });
-  const { data: user } = await supabase.from('users').select('usd').eq('telegram_id', request.user_id).single();
-  if (parseFloat(user.usd) < request.amount_usd) return res.status(400).json({ error: 'Saldo insuficiente' });
-  await supabase.from('users').update({ usd: parseFloat(user.usd) - request.amount_usd, updated_at: new Date() }).eq('telegram_id', request.user_id);
-  await supabase.from('withdraw_requests').update({ status: 'approved', updated_at: new Date() }).eq('id', id);
-  try {
-    await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      chat_id: request.user_id,
-      text: `✅ *Retiro aprobado*\nSe ha procesado tu solicitud por *${request.amount_usd} USD*.`,
-      parse_mode: 'Markdown'
-    });
-  } catch (e) {}
-  res.json({ success: true });
-});
-app.post('/api/admin/reject-withdraw/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
-  await supabase.from('withdraw_requests').update({ status: 'rejected', updated_at: new Date() }).eq('id', id);
-  const { data: request } = await supabase.from('withdraw_requests').select('user_id').eq('id', id).single();
-  if (request) {
-    try {
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        chat_id: request.user_id,
-        text: '❌ *Retiro rechazado*\nTu solicitud no pudo ser procesada.',
-        parse_mode: 'Markdown'
-      });
-    } catch (e) {}
-  }
-  res.json({ success: true });
 });
 
-// ========== ENDPOINTS DE ADMIN PARA LOTERÍA ==========
-app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
-  const { lottery, date, time_slot } = req.body;
-  const { data } = await supabase.from('lottery_sessions').insert({ lottery, date, time_slot, status: 'open' }).select().single();
-  res.json(data);
-});
 app.put('/api/admin/lottery-sessions/:id/close', requireAdmin, async (req, res) => {
   const { id } = req.params;
   await supabase.from('lottery_sessions').update({ status: 'closed', updated_at: new Date() }).eq('id', id);
   res.json({ success: true });
 });
+
+app.get('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) => {
+  const { data } = await supabase
+    .from('lottery_sessions')
+    .select('*')
+    .eq('status', 'closed')
+    .order('date', { ascending: false });
+  res.json(data);
+});
+
 app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
   const { lottery, date, time_slot, numbers } = req.body;
   const { data } = await supabase.from('winning_numbers').insert({ lottery, date, time_slot, numbers, published_at: new Date() }).select().single();
@@ -439,12 +346,10 @@ app.listen(PORT, () => {
   console.log(`🤖 Iniciando bot de Telegram...`);
 });
 
-// Lanzar el bot
 bot.launch()
   .then(() => console.log('🤖 Bot de Telegram iniciado correctamente'))
   .catch(err => console.error('❌ Error al iniciar el bot:', err));
 
-// Graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
