@@ -1,4 +1,8 @@
-// backend.js - Servidor principal, API REST y lanzamiento del bot
+// ==============================
+// backend.js - API REST + Bot de Telegram (unificado)
+// Sirve WebApp, endpoints API y lanza el bot
+// ==============================
+
 require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
@@ -8,7 +12,7 @@ const crypto = require('crypto');
 const axios = require('axios');
 const cors = require('cors');
 
-// Importar el bot (exportado desde bot.js)
+// ========== IMPORTAR BOT ==========
 const bot = require('./bot');
 
 // ========== CONFIGURACIÓN DESDE .ENV ==========
@@ -263,55 +267,51 @@ app.post('/api/transfer', async (req, res) => {
 
 // ========== ENDPOINTS DE ADMIN ==========
 app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
-  const { name, card, confirm, userId } = req.body;
+  const { name, card, confirm } = req.body;
   const { data } = await supabase.from('deposit_methods').insert({ name, card, confirm }).select().single();
   res.json(data);
 });
 app.put('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { name, card, confirm, userId } = req.body;
+  const { name, card, confirm } = req.body;
   const { data } = await supabase.from('deposit_methods').update({ name, card, confirm }).eq('id', id).select().single();
   res.json(data);
 });
 app.delete('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
   await supabase.from('deposit_methods').delete().eq('id', id);
   res.json({ success: true });
 });
 app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
-  const { name, card, confirm, userId } = req.body;
+  const { name, card, confirm } = req.body;
   const { data } = await supabase.from('withdraw_methods').insert({ name, card, confirm }).select().single();
   res.json(data);
 });
 app.put('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { name, card, confirm, userId } = req.body;
+  const { name, card, confirm } = req.body;
   const { data } = await supabase.from('withdraw_methods').update({ name, card, confirm }).eq('id', id).select().single();
   res.json(data);
 });
 app.delete('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
   await supabase.from('withdraw_methods').delete().eq('id', id);
   res.json({ success: true });
 });
 app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
-  const { rate, userId } = req.body;
+  const { rate } = req.body;
   if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
   await supabase.from('exchange_rate').update({ rate, updated_at: new Date() }).eq('id', 1);
   res.json({ success: true, rate });
 });
 app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
   const { betType } = req.params;
-  const { amount_cup, amount_usd, userId } = req.body;
+  const { amount_cup, amount_usd } = req.body;
   if (!amount_cup || !amount_usd) return res.status(400).json({ error: 'Faltan montos' });
   await supabase.from('play_prices').update({ amount_cup, amount_usd, updated_at: new Date() }).eq('bet_type', betType);
   res.json({ success: true });
 });
-app.get('/api/admin/pending-deposits', async (req, res) => {
-  const { userId } = req.query;
-  if (parseInt(userId) !== ADMIN_ID) return res.status(403).json({ error: 'No autorizado' });
+app.get('/api/admin/pending-deposits', requireAdmin, async (req, res) => {
   const { data } = await supabase
     .from('deposit_requests')
     .select('*, users(first_name, telegram_id), deposit_methods(name)')
@@ -321,7 +321,7 @@ app.get('/api/admin/pending-deposits', async (req, res) => {
 });
 app.post('/api/admin/approve-deposit/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { amount_usd, bonus_usd, userId } = req.body;
+  const { amount_usd, bonus_usd } = req.body;
   if (!amount_usd || amount_usd <= 0) return res.status(400).json({ error: 'Monto inválido' });
   const { data: request } = await supabase.from('deposit_requests').select('*').eq('id', id).single();
   if (!request) return res.status(404).json({ error: 'Solicitud no encontrada' });
@@ -343,7 +343,6 @@ app.post('/api/admin/approve-deposit/:id', requireAdmin, async (req, res) => {
 });
 app.post('/api/admin/reject-deposit/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
   await supabase.from('deposit_requests').update({ status: 'rejected', updated_at: new Date() }).eq('id', id);
   const { data: request } = await supabase.from('deposit_requests').select('user_id').eq('id', id).single();
   if (request) {
@@ -357,9 +356,7 @@ app.post('/api/admin/reject-deposit/:id', requireAdmin, async (req, res) => {
   }
   res.json({ success: true });
 });
-app.get('/api/admin/pending-withdraws', async (req, res) => {
-  const { userId } = req.query;
-  if (parseInt(userId) !== ADMIN_ID) return res.status(403).json({ error: 'No autorizado' });
+app.get('/api/admin/pending-withdraws', requireAdmin, async (req, res) => {
   const { data } = await supabase
     .from('withdraw_requests')
     .select('*, users(first_name, telegram_id), withdraw_methods(name)')
@@ -369,7 +366,6 @@ app.get('/api/admin/pending-withdraws', async (req, res) => {
 });
 app.post('/api/admin/approve-withdraw/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
   const { data: request } = await supabase.from('withdraw_requests').select('*').eq('id', id).single();
   if (!request) return res.status(404).json({ error: 'Solicitud no encontrada' });
   const { data: user } = await supabase.from('users').select('usd').eq('telegram_id', request.user_id).single();
@@ -387,7 +383,6 @@ app.post('/api/admin/approve-withdraw/:id', requireAdmin, async (req, res) => {
 });
 app.post('/api/admin/reject-withdraw/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
   await supabase.from('withdraw_requests').update({ status: 'rejected', updated_at: new Date() }).eq('id', id);
   const { data: request } = await supabase.from('withdraw_requests').select('user_id').eq('id', id).single();
   if (request) {
@@ -404,18 +399,17 @@ app.post('/api/admin/reject-withdraw/:id', requireAdmin, async (req, res) => {
 
 // ========== ENDPOINTS DE ADMIN PARA LOTERÍA ==========
 app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
-  const { lottery, date, time_slot, userId } = req.body;
+  const { lottery, date, time_slot } = req.body;
   const { data } = await supabase.from('lottery_sessions').insert({ lottery, date, time_slot, status: 'open' }).select().single();
   res.json(data);
 });
 app.put('/api/admin/lottery-sessions/:id/close', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body;
   await supabase.from('lottery_sessions').update({ status: 'closed', updated_at: new Date() }).eq('id', id);
   res.json({ success: true });
 });
 app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
-  const { lottery, date, time_slot, numbers, userId } = req.body;
+  const { lottery, date, time_slot, numbers } = req.body;
   const { data } = await supabase.from('winning_numbers').insert({ lottery, date, time_slot, numbers, published_at: new Date() }).select().single();
   res.json(data);
 });
