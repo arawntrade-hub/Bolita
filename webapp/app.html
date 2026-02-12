@@ -4,80 +4,30 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>🎰 Rifas Cuba · WebApp</title>
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Font Awesome 6 (iconos) -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <!-- Google Fonts: Poppins -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <!-- Anime.js (animaciones) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
-    <!-- iziToast (notificaciones elegantes) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/izitoast@1.4.0/dist/css/iziToast.min.css">
     <script src="https://cdn.jsdelivr.net/npm/izitoast@1.4.0/dist/js/iziToast.min.js"></script>
-    <!-- Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
-        body {
-            font-family: 'Poppins', sans-serif;
-            background: linear-gradient(145deg, #1a1e2c 0%, #2d3349 100%);
-            color: #fff;
-            min-height: 100vh;
-            padding-bottom: 30px;
-        }
-        .glass-card {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 24px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-        }
-        .btn-glow {
-            transition: all 0.2s ease;
-            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
-        }
-        .btn-glow:hover {
-            transform: scale(1.02);
-            box-shadow: 0 0 25px rgba(0, 255, 255, 0.6);
-        }
-        .neon-text {
-            text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff, 0 0 20px #00ffff;
-        }
-        .animate-pulse-slow {
-            animation: pulse 3s infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.8; }
-        }
-        .hidden-section {
-            display: none;
-        }
-        .active-section {
-            display: block;
-        }
-        .loader {
-            border: 4px solid rgba(255,255,255,0.3);
-            border-top: 4px solid #00ffff;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        body { font-family: 'Poppins', sans-serif; background: linear-gradient(145deg, #1a1e2c 0%, #2d3349 100%); color: #fff; min-height: 100vh; padding-bottom: 30px; }
+        .glass-card { background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.2); border-radius: 24px; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+        .btn-glow { transition: all 0.2s ease; box-shadow: 0 0 15px rgba(0,255,255,0.3); }
+        .btn-glow:hover { transform: scale(1.02); box-shadow: 0 0 25px rgba(0,255,255,0.6); }
+        .neon-text { text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff, 0 0 20px #00ffff; }
+        .animate-pulse-slow { animation: pulse 3s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.8; } }
+        .hidden-section { display: none; }
+        .active-section { display: block; }
+        .loader { border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid #00ffff; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body class="p-4 md:p-6">
-
-    <!-- Contenedor principal -->
     <div id="app" class="max-w-4xl mx-auto relative">
-
-        <!-- Header con avatar y saldo rápido -->
-        <div class="flex items-center justify-between mb-6 animate__animated animate__fadeInDown">
+        <div class="flex items-center justify-between mb-6">
             <div class="flex items-center space-x-3">
                 <div class="w-12 h-12 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 flex items-center justify-center shadow-lg">
                     <i class="fas fa-dice text-white text-2xl"></i>
@@ -92,88 +42,60 @@
                 <span id="quickBalance" class="font-semibold text-white">0.00 USD</span>
             </div>
         </div>
-
-        <!-- Loader principal (mientras carga datos) -->
         <div id="globalLoader" class="flex justify-center items-center py-20">
             <div class="loader"></div>
         </div>
-
-        <!-- Contenido principal (oculto hasta autenticar) -->
         <div id="mainContent" class="hidden">
-
-            <!-- Menú de navegación inferior estilo app -->
             <div class="glass-card fixed bottom-4 left-4 right-4 max-w-4xl mx-auto p-2 flex justify-around z-50">
                 <button data-section="home" class="nav-btn flex flex-col items-center p-2 rounded-xl text-white transition-all">
-                    <i class="fas fa-home text-2xl"></i>
-                    <span class="text-xs mt-1">Inicio</span>
+                    <i class="fas fa-home text-2xl"></i><span class="text-xs mt-1">Inicio</span>
                 </button>
                 <button data-section="play" class="nav-btn flex flex-col items-center p-2 rounded-xl text-white transition-all">
-                    <i class="fas fa-gamepad text-2xl"></i>
-                    <span class="text-xs mt-1">Jugar</span>
+                    <i class="fas fa-gamepad text-2xl"></i><span class="text-xs mt-1">Jugar</span>
                 </button>
                 <button data-section="wallet" class="nav-btn flex flex-col items-center p-2 rounded-xl text-white transition-all">
-                    <i class="fas fa-wallet text-2xl"></i>
-                    <span class="text-xs mt-1">Mi dinero</span>
+                    <i class="fas fa-wallet text-2xl"></i><span class="text-xs mt-1">Mi dinero</span>
                 </button>
                 <button data-section="bets" class="nav-btn flex flex-col items-center p-2 rounded-xl text-white transition-all">
-                    <i class="fas fa-ticket-alt text-2xl"></i>
-                    <span class="text-xs mt-1">Jugadas</span>
+                    <i class="fas fa-ticket-alt text-2xl"></i><span class="text-xs mt-1">Jugadas</span>
                 </button>
                 <button data-section="referrals" class="nav-btn flex flex-col items-center p-2 rounded-xl text-white transition-all">
-                    <i class="fas fa-users text-2xl"></i>
-                    <span class="text-xs mt-1">Referidos</span>
+                    <i class="fas fa-users text-2xl"></i><span class="text-xs mt-1">Referidos</span>
                 </button>
-                <!-- Botón Admin visible solo si es admin (se agregará dinámicamente) -->
                 <button id="adminNavBtn" data-section="admin" class="nav-btn hidden flex flex-col items-center p-2 rounded-xl text-white transition-all">
-                    <i class="fas fa-crown text-2xl"></i>
-                    <span class="text-xs mt-1">Admin</span>
+                    <i class="fas fa-crown text-2xl"></i><span class="text-xs mt-1">Admin</span>
                 </button>
             </div>
-
-            <!-- Contenedor de secciones -->
             <div id="sectionsContainer" class="mt-4 mb-24">
-                <!-- SECCIÓN HOME -->
+                <!-- HOME -->
                 <div id="section-home" class="section active-section">
-                    <div class="glass-card p-6 text-center animate__animated animate__fadeInUp">
+                    <div class="glass-card p-6 text-center">
                         <div class="w-24 h-24 mx-auto bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center mb-4 shadow-2xl animate-pulse-slow">
                             <i class="fas fa-dice-d6 text-5xl text-white"></i>
                         </div>
                         <h2 class="text-3xl font-bold neon-text mb-2">¡Bienvenido!</h2>
-                        <p class="text-gray-200 mb-6">Selecciona una opción en el menú inferior para comenzar a jugar y ganar.</p>
+                        <p class="text-gray-200 mb-6">Selecciona una opción en el menú inferior.</p>
                         <div class="grid grid-cols-2 gap-4">
-                            <div class="bg-white/20 p-4 rounded-2xl backdrop-blur-sm">
-                                <i class="fas fa-trophy text-3xl text-yellow-300 mb-2"></i>
-                                <p class="font-bold">Bono de bienvenida</p>
-                                <p class="text-sm text-gray-300">70 CUP en USD</p>
-                            </div>
-                            <div class="bg-white/20 p-4 rounded-2xl backdrop-blur-sm">
-                                <i class="fas fa-percent text-3xl text-green-300 mb-2"></i>
-                                <p class="font-bold">Comisión referidos</p>
-                                <p class="text-sm text-gray-300">5% de por vida</p>
-                            </div>
+                            <div class="bg-white/20 p-4 rounded-2xl"><i class="fas fa-trophy text-3xl text-yellow-300 mb-2"></i><p class="font-bold">Bono</p><p class="text-sm text-gray-300">70 CUP en USD</p></div>
+                            <div class="bg-white/20 p-4 rounded-2xl"><i class="fas fa-percent text-3xl text-green-300 mb-2"></i><p class="font-bold">Referidos</p><p class="text-sm text-gray-300">5% de por vida</p></div>
                         </div>
                     </div>
                 </div>
-
-                <!-- SECCIÓN JUGAR -->
+                <!-- PLAY -->
                 <div id="section-play" class="section hidden-section">
                     <div class="glass-card p-5">
-                        <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-dice mr-3 text-cyan-300"></i>Elige lotería</h3>
+                        <h3 class="text-2xl font-bold mb-4"><i class="fas fa-dice mr-3 text-cyan-300"></i>Elige lotería</h3>
                         <div class="grid grid-cols-3 gap-3 mb-6">
                             <button data-lottery="Florida" class="lottery-btn bg-gradient-to-br from-red-500 to-orange-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition">
-                                <i class="fas fa-umbrella-beach text-3xl mb-2"></i>
-                                <span class="block font-bold">Florida</span>
+                                <i class="fas fa-umbrella-beach text-3xl mb-2"></i><span class="block font-bold">Florida</span>
                             </button>
                             <button data-lottery="Georgia" class="lottery-btn bg-gradient-to-br from-green-600 to-teal-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition">
-                                <i class="fas fa-peach text-3xl mb-2"></i>
-                                <span class="block font-bold">Georgia</span>
+                                <i class="fas fa-peach text-3xl mb-2"></i><span class="block font-bold">Georgia</span>
                             </button>
                             <button data-lottery="Nueva York" class="lottery-btn bg-gradient-to-br from-blue-700 to-indigo-800 p-4 rounded-2xl shadow-lg hover:scale-105 transition">
-                                <i class="fas fa-city text-3xl mb-2"></i>
-                                <span class="block font-bold">New York</span>
+                                <i class="fas fa-city text-3xl mb-2"></i><span class="block font-bold">Nueva York</span>
                             </button>
                         </div>
-                        
                         <div id="betTypeContainer" class="hidden">
                             <h4 class="text-xl font-semibold mb-3">Tipo de jugada</h4>
                             <div class="grid grid-cols-2 gap-3 mb-4">
@@ -183,7 +105,6 @@
                                 <button data-type="parle" class="type-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700">🔒 Parle</button>
                             </div>
                         </div>
-
                         <div id="betFormContainer" class="hidden">
                             <label class="block mb-2 font-medium">✍️ Escribe tus números (ej: 12 con 1 usd):</label>
                             <textarea id="betInput" rows="3" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 focus:ring-2 focus:ring-cyan-400"></textarea>
@@ -193,116 +114,85 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- SECCIÓN MI DINERO (WALLET) -->
+                <!-- WALLET -->
                 <div id="section-wallet" class="section hidden-section">
                     <div class="glass-card p-5">
                         <h3 class="text-2xl font-bold mb-4">💰 Mi saldo</h3>
                         <div class="grid grid-cols-2 gap-4 mb-6">
-                            <div class="bg-gradient-to-br from-yellow-500 to-yellow-700 p-4 rounded-2xl text-center shadow-xl">
+                            <div class="bg-gradient-to-br from-yellow-500 to-yellow-700 p-4 rounded-2xl text-center">
                                 <p class="text-sm opacity-90">USD</p>
                                 <p id="walletUsd" class="text-3xl font-bold">0.00</p>
                             </div>
-                            <div class="bg-gradient-to-br from-green-500 to-green-700 p-4 rounded-2xl text-center shadow-xl">
+                            <div class="bg-gradient-to-br from-green-500 to-green-700 p-4 rounded-2xl text-center">
                                 <p class="text-sm opacity-90">CUP</p>
                                 <p id="walletCup" class="text-3xl font-bold">0.00</p>
                             </div>
                             <div class="col-span-2 bg-blue-900/50 p-4 rounded-2xl text-center">
-                                <p class="text-sm">🎁 Bono (no retirable)</p>
+                                <p class="text-sm">🎁 Bono</p>
                                 <p id="walletBonus" class="text-2xl font-semibold text-cyan-300">0.00 USD</p>
                             </div>
                         </div>
                         <div class="grid grid-cols-3 gap-3">
-                            <button id="rechargeBtn" class="bg-indigo-600 p-3 rounded-xl hover:bg-indigo-700 transition">
-                                <i class="fas fa-arrow-down mr-1"></i> Recargar
-                            </button>
-                            <button id="withdrawBtn" class="bg-pink-600 p-3 rounded-xl hover:bg-pink-700 transition">
-                                <i class="fas fa-arrow-up mr-1"></i> Retirar
-                            </button>
-                            <button id="transferBtn" class="bg-gray-600 p-3 rounded-xl hover:bg-gray-700 transition">
-                                <i class="fas fa-exchange-alt mr-1"></i> Transferir
-                            </button>
+                            <button id="rechargeBtn" class="bg-indigo-600 p-3 rounded-xl hover:bg-indigo-700"><i class="fas fa-arrow-down mr-1"></i> Recargar</button>
+                            <button id="withdrawBtn" class="bg-pink-600 p-3 rounded-xl hover:bg-pink-700"><i class="fas fa-arrow-up mr-1"></i> Retirar</button>
+                            <button id="transferBtn" class="bg-gray-600 p-3 rounded-xl hover:bg-gray-700"><i class="fas fa-exchange-alt mr-1"></i> Transferir</button>
                         </div>
-
-                        <!-- Subsección de recarga (oculta) -->
                         <div id="rechargeSection" class="hidden mt-6">
-                            <h4 class="text-xl font-semibold mb-3">📥 Recargar saldo</h4>
-                            <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                                <option value="">Selecciona método...</option>
-                            </select>
+                            <h4 class="text-xl font-semibold mb-3">📥 Recargar</h4>
+                            <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3"></select>
                             <div id="methodDetails" class="bg-gray-800/80 p-4 rounded-xl text-sm mb-4 hidden">
                                 <p><span class="font-bold">Número:</span> <span id="methodCard"></span></p>
                                 <p><span class="font-bold">Confirmar:</span> <span id="methodConfirm"></span></p>
                             </div>
-                            <label class="block mb-2">📸 Sube captura de la transferencia:</label>
+                            <label class="block mb-2">📸 Captura:</label>
                             <input type="file" id="screenshotInput" accept="image/*" class="w-full text-white mb-3">
-                            <button id="submitDepositBtn" class="w-full bg-green-600 py-2 rounded-xl font-semibold hover:bg-green-700 disabled:opacity-50" disabled>
-                                Enviar solicitud
-                            </button>
+                            <button id="submitDepositBtn" class="w-full bg-green-600 py-2 rounded-xl font-semibold hover:bg-green-700 disabled:opacity-50" disabled>Enviar solicitud</button>
                         </div>
-
-                        <!-- Subsección de retiro (oculta) -->
                         <div id="withdrawSection" class="hidden mt-6">
-                            <h4 class="text-xl font-semibold mb-3">📤 Retirar fondos</h4>
-                            <select id="withdrawMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
-                                <option value="">Selecciona método...</option>
-                            </select>
-                            <input type="number" id="withdrawAmount" placeholder="Monto en USD (mín. 1)" step="0.01" min="1" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
-                            <input type="text" id="withdrawAccount" placeholder="Número de cuenta / tarjeta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
-                            <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-2 rounded-xl font-semibold hover:bg-pink-700">
-                                Solicitar retiro
-                            </button>
+                            <h4 class="text-xl font-semibold mb-3">📤 Retirar</h4>
+                            <select id="withdrawMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3"></select>
+                            <input type="number" id="withdrawAmount" placeholder="Monto USD (mín. 1)" step="0.01" min="1" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                            <input type="text" id="withdrawAccount" placeholder="Número de cuenta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                            <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-2 rounded-xl font-semibold hover:bg-pink-700">Solicitar retiro</button>
                         </div>
-
-                        <!-- Subsección de transferencia (oculta) -->
                         <div id="transferSection" class="hidden mt-6">
-                            <h4 class="text-xl font-semibold mb-3">🔄 Transferir a otro usuario</h4>
-                            <input type="number" id="transferTarget" placeholder="ID de Telegram del destinatario" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-purple-500 mb-3">
-                            <input type="number" id="transferAmount" placeholder="Monto en USD" step="0.01" min="0.01" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-purple-500 mb-3">
-                            <button id="submitTransferBtn" class="w-full bg-purple-600 py-2 rounded-xl font-semibold hover:bg-purple-700">
-                                Transferir
-                            </button>
+                            <h4 class="text-xl font-semibold mb-3">🔄 Transferir</h4>
+                            <input type="number" id="transferTarget" placeholder="ID de Telegram destinatario" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-purple-500 mb-3">
+                            <input type="number" id="transferAmount" placeholder="Monto USD" step="0.01" min="0.01" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-purple-500 mb-3">
+                            <button id="submitTransferBtn" class="w-full bg-purple-600 py-2 rounded-xl font-semibold hover:bg-purple-700">Transferir</button>
                         </div>
                     </div>
                 </div>
-
-                <!-- SECCIÓN MIS JUGADAS -->
+                <!-- BETS -->
                 <div id="section-bets" class="section hidden-section">
                     <div class="glass-card p-5">
-                        <h3 class="text-2xl font-bold mb-4">📋 Historial de apuestas</h3>
-                        <div id="betsList" class="space-y-3">
-                            <!-- Se llena dinámicamente -->
-                            <p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p>
-                        </div>
+                        <h3 class="text-2xl font-bold mb-4">📋 Historial</h3>
+                        <div id="betsList" class="space-y-3"><p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p></div>
                     </div>
                 </div>
-
-                <!-- SECCIÓN REFERIDOS -->
+                <!-- REFERRALS -->
                 <div id="section-referrals" class="section hidden-section">
                     <div class="glass-card p-5">
                         <h3 class="text-2xl font-bold mb-4">👥 Invita y gana</h3>
                         <div class="bg-gradient-to-r from-yellow-600/30 to-pink-600/30 p-5 rounded-2xl text-center mb-4">
                             <i class="fas fa-gift text-5xl text-yellow-300 mb-3"></i>
                             <p class="text-lg font-bold">¡Gana comisión de por vida!</p>
-                            <p class="text-sm">5% de cada apuesta de tus referidos</p>
+                            <p class="text-sm">5% de cada apuesta</p>
                         </div>
                         <div class="bg-gray-800/60 p-4 rounded-xl mb-4">
-                            <p class="text-sm text-gray-300 mb-1">Tu enlace de referido:</p>
+                            <p class="text-sm text-gray-300 mb-1">Tu enlace:</p>
                             <div class="flex">
-                                <input id="referralLink" type="text" readonly class="flex-1 bg-gray-900 p-2 rounded-l-xl text-xs text-cyan-300" value="Cargando...">
-                                <button id="copyLinkBtn" class="bg-cyan-600 px-4 rounded-r-xl hover:bg-cyan-700">
-                                    <i class="fas fa-copy"></i>
-                                </button>
+                                <input id="referralLink" type="text" readonly class="flex-1 bg-gray-900 p-2 rounded-l-xl text-xs text-cyan-300">
+                                <button id="copyLinkBtn" class="bg-cyan-600 px-4 rounded-r-xl hover:bg-cyan-700"><i class="fas fa-copy"></i></button>
                             </div>
                         </div>
-                        <div class="flex justify-between items-center">
+                        <div class="flex justify-between">
                             <span class="font-semibold">Total referidos:</span>
                             <span id="referralCount" class="text-2xl font-bold text-yellow-400">0</span>
                         </div>
                     </div>
                 </div>
-
-                <!-- SECCIÓN ADMIN (solo visible para admin) -->
+                <!-- ADMIN (solo visible si isAdmin) -->
                 <div id="section-admin" class="section hidden-section">
                     <div class="glass-card p-5">
                         <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-crown text-yellow-400 mr-2"></i>Panel Admin</h3>
@@ -313,96 +203,55 @@
                             <button data-admin="play-prices" class="admin-btn bg-purple-600/80 p-3 rounded-xl">🎲 Precios jugadas</button>
                             <button data-admin="pending-deposits" class="admin-btn bg-yellow-600/80 p-3 rounded-xl">⏳ Depósitos pend.</button>
                             <button data-admin="pending-withdraws" class="admin-btn bg-orange-600/80 p-3 rounded-xl">⏳ Retiros pend.</button>
+                            <button data-admin="lottery-sessions" class="admin-btn bg-indigo-600/80 p-3 rounded-xl">🎰 Sesiones</button>
+                            <button data-admin="winning-numbers" class="admin-btn bg-red-600/80 p-3 rounded-xl">🔢 Números gan.</button>
                         </div>
-                        <div id="adminContent" class="mt-6">
-                            <!-- Se cargará dinámicamente -->
-                        </div>
+                        <div id="adminContent" class="mt-6"></div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-
     <script>
         const TG = window.Telegram.WebApp;
-        TG.ready();
-        TG.expand();
-
-        // Estado global
-        let currentUser = null;
-        let isAdmin = false;
-        let exchangeRate = 110;
-        let botUsername = 'RifasCubaBot'; // se actualizará desde backend
-
-        // Elementos DOM
+        TG.ready(); TG.expand();
+        let currentUser = null, isAdmin = false, exchangeRate = 110, botUsername = 'RifasCubaBot';
         const globalLoader = document.getElementById('globalLoader');
         const mainContent = document.getElementById('mainContent');
         const sections = document.querySelectorAll('.section');
         const navBtns = document.querySelectorAll('.nav-btn');
 
-        // Inicializar autenticación
         async function initAuth() {
             try {
                 const initData = TG.initData;
-                if (!initData) {
-                    iziToast.error({ title: 'Error', message: 'No se pudo autenticar con Telegram' });
-                    return;
-                }
-
-                const response = await fetch('/api/auth', {
+                if (!initData) { iziToast.error({ title: 'Error', message: 'No autenticado' }); return; }
+                const res = await fetch('/api/auth', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ initData })
                 });
-
-                if (!response.ok) throw new Error('Auth failed');
-
-                const data = await response.json();
+                if (!res.ok) throw new Error('Auth failed');
+                const data = await res.json();
                 currentUser = data.user;
                 isAdmin = data.isAdmin;
                 exchangeRate = data.exchangeRate || 110;
                 botUsername = data.botUsername || 'RifasCubaBot';
-
-                // Actualizar UI
                 document.getElementById('userName').innerText = currentUser.first_name || 'Jugador';
                 updateBalanceUI();
-                
-                // Mostrar botón Admin si es admin
-                if (isAdmin) {
-                    document.getElementById('adminNavBtn').classList.remove('hidden');
-                }
-
-                // Ocultar loader, mostrar contenido
+                if (isAdmin) document.getElementById('adminNavBtn').classList.remove('hidden');
                 globalLoader.classList.add('hidden');
                 mainContent.classList.remove('hidden');
-
-                // Cargar métodos de pago
                 loadDepositMethods();
                 loadWithdrawMethods();
-
-                // Cargar apuestas recientes
                 loadBets();
-
-                // Cargar estadísticas de referidos
                 loadReferralStats();
-
-                // Animación de entrada
-                anime({
-                    targets: '.glass-card',
-                    opacity: [0, 1],
-                    translateY: [20, 0],
-                    duration: 800,
-                    easing: 'easeOutQuad'
-                });
-
-            } catch (e) {
+                anime({ targets: '.glass-card', opacity: [0,1], translateY: [20,0], duration: 800, easing: 'easeOutQuad' });
+            } catch(e) {
                 console.error(e);
-                iziToast.error({ title: 'Error', message: 'No se pudo cargar la sesión. Redirigiendo...' });
+                iziToast.error({ title: 'Error', message: 'No se pudo cargar la sesión' });
                 setTimeout(() => window.location.href = '/index.html', 2000);
             }
         }
-
-        // Actualizar saldos en UI
         function updateBalanceUI() {
             if (!currentUser) return;
             document.getElementById('quickBalance').innerText = `${parseFloat(currentUser.usd).toFixed(2)} USD`;
@@ -410,70 +259,45 @@
             document.getElementById('walletCup').innerText = parseFloat(currentUser.cup).toFixed(2);
             document.getElementById('walletBonus').innerText = `${parseFloat(currentUser.bonus_usd).toFixed(2)} USD`;
         }
-
-        // Cargar métodos de depósito desde backend
         async function loadDepositMethods() {
             try {
                 const res = await fetch('/api/deposit-methods');
                 const methods = await res.json();
                 const select = document.getElementById('depositMethodSelect');
                 select.innerHTML = '<option value="">Selecciona método...</option>';
-                methods.forEach(m => {
-                    const option = document.createElement('option');
-                    option.value = m.id;
-                    option.textContent = m.name;
-                    select.appendChild(option);
-                });
-            } catch (e) {
-                console.error(e);
-            }
+                methods.forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; select.appendChild(o); });
+            } catch(e) { console.error(e); }
         }
-
-        // Cargar métodos de retiro
         async function loadWithdrawMethods() {
             try {
                 const res = await fetch('/api/withdraw-methods');
                 const methods = await res.json();
                 const select = document.getElementById('withdrawMethodSelect');
                 select.innerHTML = '<option value="">Selecciona método...</option>';
-                methods.forEach(m => {
-                    const option = document.createElement('option');
-                    option.value = m.id;
-                    option.textContent = m.name;
-                    select.appendChild(option);
-                });
-            } catch (e) {}
+                methods.forEach(m => { const o = document.createElement('option'); o.value = m.id; o.textContent = m.name; select.appendChild(o); });
+            } catch(e) {}
         }
-
-        // Cargar últimas apuestas
         async function loadBets() {
             if (!currentUser) return;
             try {
                 const res = await fetch(`/api/user/${currentUser.telegram_id}/bets?limit=5`);
                 const bets = await res.json();
                 const container = document.getElementById('betsList');
-                if (bets.length === 0) {
-                    container.innerHTML = '<p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p>';
-                } else {
+                if (bets.length === 0) container.innerHTML = '<p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p>';
+                else {
                     let html = '';
                     bets.forEach(b => {
                         html += `<div class="bg-gray-800/50 p-3 rounded-xl flex justify-between items-center">
-                                    <div>
-                                        <span class="font-bold">🎰 ${b.lottery} - ${b.bet_type}</span>
-                                        <p class="text-xs text-gray-400">${new Date(b.placed_at).toLocaleString()}</p>
-                                    </div>
-                                    <div class="text-right">
-                                        <span class="text-cyan-300">${b.cost_usd} USD</span>
-                                        <span class="text-gray-400 text-xs block">${b.cost_cup} CUP</span>
-                                    </div>
+                                    <div><span class="font-bold">🎰 ${b.lottery} - ${b.bet_type}</span>
+                                    <p class="text-xs text-gray-400">${new Date(b.placed_at).toLocaleString()}</p></div>
+                                    <div class="text-right"><span class="text-cyan-300">${b.cost_usd} USD</span>
+                                    <span class="text-gray-400 text-xs block">${b.cost_cup} CUP</span></div>
                                 </div>`;
                     });
                     container.innerHTML = html;
                 }
-            } catch (e) {}
+            } catch(e) {}
         }
-
-        // Cargar estadísticas de referidos
         async function loadReferralStats() {
             if (!currentUser) return;
             try {
@@ -482,258 +306,255 @@
                 document.getElementById('referralCount').innerText = data.count || 0;
                 const link = `https://t.me/${botUsername}?start=${currentUser.telegram_id}`;
                 document.getElementById('referralLink').value = link;
-            } catch (e) {}
+            } catch(e) {}
         }
-
-        // Navegación entre secciones
         function showSection(sectionId) {
-            sections.forEach(s => {
-                s.classList.add('hidden-section');
-                s.classList.remove('active-section');
-            });
-            const activeSection = document.getElementById(`section-${sectionId}`);
-            if (activeSection) {
-                activeSection.classList.remove('hidden-section');
-                activeSection.classList.add('active-section');
-            }
+            sections.forEach(s => { s.classList.add('hidden-section'); s.classList.remove('active-section'); });
+            const active = document.getElementById(`section-${sectionId}`);
+            if (active) { active.classList.remove('hidden-section'); active.classList.add('active-section'); }
         }
+        navBtns.forEach(btn => btn.addEventListener('click', e => showSection(e.currentTarget.dataset.section)));
 
-        navBtns.forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const section = e.currentTarget.dataset.section;
-                showSection(section);
-            });
-        });
-
-        // Evento para botón "Recargar"
-        document.getElementById('rechargeBtn').addEventListener('click', () => {
+        // Wallet subsections
+        document.getElementById('rechargeBtn').addEventListener('click', ()=>{
             document.getElementById('rechargeSection').classList.toggle('hidden');
-            // Ocultar otras subsecciones
             document.getElementById('withdrawSection').classList.add('hidden');
             document.getElementById('transferSection').classList.add('hidden');
         });
-
-        // Mostrar detalles del método de depósito
-        document.getElementById('depositMethodSelect').addEventListener('change', async (e) => {
-            const methodId = e.target.value;
-            if (!methodId) {
-                document.getElementById('methodDetails').classList.add('hidden');
-                document.getElementById('submitDepositBtn').disabled = true;
-                return;
-            }
-            try {
-                const res = await fetch(`/api/deposit-methods/${methodId}`);
-                const method = await res.json();
-                document.getElementById('methodCard').innerText = method.card;
-                document.getElementById('methodConfirm').innerText = method.confirm;
-                document.getElementById('methodDetails').classList.remove('hidden');
-                document.getElementById('submitDepositBtn').disabled = false;
-            } catch (e) {}
-        });
-
-        // Subir captura de depósito
-        document.getElementById('submitDepositBtn').addEventListener('click', async () => {
-            const fileInput = document.getElementById('screenshotInput');
-            const methodId = document.getElementById('depositMethodSelect').value;
-            if (!fileInput.files[0] || !methodId) {
-                iziToast.warning({ title: 'Faltan datos', message: 'Selecciona un método y una captura' });
-                return;
-            }
-
-            const formData = new FormData();
-            formData.append('screenshot', fileInput.files[0]);
-            formData.append('methodId', methodId);
-            formData.append('userId', currentUser.telegram_id);
-
-            const btn = document.getElementById('submitDepositBtn');
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Enviando...';
-
-            try {
-                const res = await fetch('/api/deposit-requests', {
-                    method: 'POST',
-                    body: formData
-                });
-                if (res.ok) {
-                    iziToast.success({ title: 'Éxito', message: 'Solicitud enviada. Pronto se acreditará.' });
-                    document.getElementById('rechargeSection').classList.add('hidden');
-                    fileInput.value = '';
-                } else {
-                    iziToast.error({ title: 'Error', message: 'No se pudo enviar la solicitud' });
-                }
-            } catch (e) {
-                iziToast.error({ title: 'Error', message: 'Error de conexión' });
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fas fa-check-circle mr-2"></i>Enviar solicitud';
-            }
-        });
-
-        // Retiro: mostrar subsección
-        document.getElementById('withdrawBtn').addEventListener('click', () => {
+        document.getElementById('withdrawBtn').addEventListener('click', ()=>{
             document.getElementById('withdrawSection').classList.toggle('hidden');
             document.getElementById('rechargeSection').classList.add('hidden');
             document.getElementById('transferSection').classList.add('hidden');
         });
-
-        // Solicitar retiro
-        document.getElementById('submitWithdrawBtn').addEventListener('click', async () => {
-            const methodId = document.getElementById('withdrawMethodSelect').value;
-            const amount = parseFloat(document.getElementById('withdrawAmount').value);
-            const account = document.getElementById('withdrawAccount').value.trim();
-            if (!methodId || !amount || amount < 1 || !account) {
-                iziToast.warning({ title: 'Datos incompletos', message: 'Completa todos los campos' });
-                return;
-            }
-            if (amount > parseFloat(currentUser.usd)) {
-                iziToast.error({ title: 'Saldo insuficiente', message: `Tienes ${currentUser.usd} USD disponibles` });
-                return;
-            }
-            try {
-                const res = await fetch('/api/withdraw-requests', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ methodId, amount, account, userId: currentUser.telegram_id })
-                });
-                if (res.ok) {
-                    iziToast.success({ title: 'Solicitud enviada', message: 'Retiro en proceso de revisión' });
-                    // Actualizar saldo (localmente hasta que el admin apruebe)
-                    currentUser.usd -= amount;
-                    updateBalanceUI();
-                    document.getElementById('withdrawSection').classList.add('hidden');
-                    document.getElementById('withdrawAmount').value = '';
-                    document.getElementById('withdrawAccount').value = '';
-                } else {
-                    iziToast.error({ title: 'Error', message: 'No se pudo crear la solicitud' });
-                }
-            } catch (e) {
-                iziToast.error({ title: 'Error', message: 'Error de conexión' });
-            }
-        });
-
-        // Transferencia
-        document.getElementById('transferBtn').addEventListener('click', () => {
+        document.getElementById('transferBtn').addEventListener('click', ()=>{
             document.getElementById('transferSection').classList.toggle('hidden');
             document.getElementById('rechargeSection').classList.add('hidden');
             document.getElementById('withdrawSection').classList.add('hidden');
         });
 
+        // Deposit method details
+        document.getElementById('depositMethodSelect').addEventListener('change', async (e) => {
+            const mid = e.target.value;
+            if (!mid) { document.getElementById('methodDetails').classList.add('hidden'); document.getElementById('submitDepositBtn').disabled = true; return; }
+            const res = await fetch(`/api/deposit-methods/${mid}`);
+            const method = await res.json();
+            document.getElementById('methodCard').innerText = method.card;
+            document.getElementById('methodConfirm').innerText = method.confirm;
+            document.getElementById('methodDetails').classList.remove('hidden');
+            document.getElementById('submitDepositBtn').disabled = false;
+        });
+
+        // Submit deposit
+        document.getElementById('submitDepositBtn').addEventListener('click', async () => {
+            const file = document.getElementById('screenshotInput').files[0];
+            const methodId = document.getElementById('depositMethodSelect').value;
+            if (!file || !methodId) { iziToast.warning({ title: 'Faltan datos', message: 'Captura y método' }); return; }
+            const form = new FormData();
+            form.append('screenshot', file);
+            form.append('methodId', methodId);
+            form.append('userId', currentUser.telegram_id);
+            const btn = document.getElementById('submitDepositBtn');
+            btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Enviando...';
+            try {
+                const res = await fetch('/api/deposit-requests', { method: 'POST', body: form });
+                if (res.ok) { iziToast.success({ title: 'Éxito', message: 'Solicitud enviada' }); document.getElementById('rechargeSection').classList.add('hidden'); }
+                else iziToast.error({ title: 'Error', message: 'No se pudo enviar' });
+            } catch(e) { iziToast.error({ title: 'Error', message: 'Error de conexión' }); }
+            finally { btn.disabled = false; btn.innerHTML = '<i class="fas fa-check-circle mr-2"></i>Enviar solicitud'; }
+        });
+
+        // Submit withdraw
+        document.getElementById('submitWithdrawBtn').addEventListener('click', async () => {
+            const methodId = document.getElementById('withdrawMethodSelect').value;
+            const amount = parseFloat(document.getElementById('withdrawAmount').value);
+            const account = document.getElementById('withdrawAccount').value.trim();
+            if (!methodId || !amount || amount < 1 || !account) { iziToast.warning({ title: 'Datos incompletos' }); return; }
+            if (amount > parseFloat(currentUser.usd)) { iziToast.error({ title: 'Saldo insuficiente' }); return; }
+            const res = await fetch('/api/withdraw-requests', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ methodId, amount, account, userId: currentUser.telegram_id })
+            });
+            if (res.ok) {
+                iziToast.success({ title: 'Solicitud enviada' });
+                currentUser.usd -= amount;
+                updateBalanceUI();
+                document.getElementById('withdrawSection').classList.add('hidden');
+                document.getElementById('withdrawAmount').value = '';
+                document.getElementById('withdrawAccount').value = '';
+            } else iziToast.error({ title: 'Error', message: 'No se pudo crear la solicitud' });
+        });
+
+        // Submit transfer
         document.getElementById('submitTransferBtn').addEventListener('click', async () => {
             const targetId = parseInt(document.getElementById('transferTarget').value);
             const amount = parseFloat(document.getElementById('transferAmount').value);
-            if (!targetId || !amount || amount <= 0) {
-                iziToast.warning({ title: 'Datos inválidos', message: 'Verifica el ID y el monto' });
-                return;
-            }
-            if (amount > parseFloat(currentUser.usd)) {
-                iziToast.error({ title: 'Saldo insuficiente', message: `Tienes ${currentUser.usd} USD disponibles` });
-                return;
-            }
-            try {
-                const res = await fetch('/api/transfer', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ from: currentUser.telegram_id, to: targetId, amount })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    iziToast.success({ title: 'Transferencia exitosa', message: `Enviaste ${amount} USD a ${targetId}` });
-                    currentUser.usd -= amount;
-                    updateBalanceUI();
-                    document.getElementById('transferSection').classList.add('hidden');
-                    document.getElementById('transferTarget').value = '';
-                    document.getElementById('transferAmount').value = '';
-                } else {
-                    iziToast.error({ title: 'Error', message: data.message || 'No se pudo transferir' });
-                }
-            } catch (e) {
-                iziToast.error({ title: 'Error', message: 'Error de conexión' });
-            }
+            if (!targetId || !amount || amount <= 0) { iziToast.warning({ title: 'Datos inválidos' }); return; }
+            if (amount > parseFloat(currentUser.usd)) { iziToast.error({ title: 'Saldo insuficiente' }); return; }
+            const res = await fetch('/api/transfer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ from: currentUser.telegram_id, to: targetId, amount })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                iziToast.success({ title: 'Transferencia exitosa', message: `Enviaste ${amount} USD` });
+                currentUser.usd -= amount;
+                updateBalanceUI();
+                document.getElementById('transferSection').classList.add('hidden');
+                document.getElementById('transferTarget').value = '';
+                document.getElementById('transferAmount').value = '';
+            } else iziToast.error({ title: 'Error', message: data.message || 'No se pudo transferir' });
         });
 
-        // Lotería: selección
+        // Lottery selection
         document.querySelectorAll('.lottery-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const lottery = btn.dataset.lottery;
-                // Ocultar selección de lotería y mostrar tipos
                 document.getElementById('betTypeContainer').classList.remove('hidden');
-                // Guardar lotería seleccionada en un dataset global
                 document.getElementById('betTypeContainer').dataset.lottery = lottery;
             });
         });
-
-        // Tipo de jugada
         document.querySelectorAll('.type-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const type = btn.dataset.type;
                 const lottery = document.getElementById('betTypeContainer').dataset.lottery || 'Florida';
                 document.getElementById('betFormContainer').classList.remove('hidden');
-                // Aquí podrías cambiar el placeholder según el tipo
                 document.getElementById('betFormContainer').dataset.type = type;
                 document.getElementById('betFormContainer').dataset.lottery = lottery;
             });
         });
 
-        // Enviar apuesta
+        // Submit bet
         document.getElementById('submitBetBtn').addEventListener('click', async () => {
-            const rawText = document.getElementById('betInput').value.trim();
+            const raw = document.getElementById('betInput').value.trim();
             const betType = document.getElementById('betFormContainer').dataset.type;
             const lottery = document.getElementById('betFormContainer').dataset.lottery;
-            if (!rawText || !betType) {
-                iziToast.warning({ title: 'Falta información', message: 'Escribe los números de tu jugada' });
-                return;
-            }
-            try {
-                const res = await fetch('/api/bets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        userId: currentUser.telegram_id,
-                        lottery,
-                        betType,
-                        rawText
-                    })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    iziToast.success({ title: '✅ Jugada registrada', message: '¡Buena suerte!' });
-                    // Actualizar saldo
-                    currentUser = data.updatedUser;
-                    updateBalanceUI();
-                    loadBets();
-                    // Limpiar y volver a home
-                    document.getElementById('betInput').value = '';
-                    showSection('home');
-                } else {
-                    iziToast.error({ title: 'Error', message: data.message || 'No se pudo registrar' });
-                }
-            } catch (e) {
-                iziToast.error({ title: 'Error', message: 'Error de conexión' });
-            }
+            if (!raw || !betType) { iziToast.warning({ title: 'Falta info' }); return; }
+            const res = await fetch('/api/bets', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId: currentUser.telegram_id, lottery, betType, rawText: raw })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                iziToast.success({ title: '✅ Jugada registrada', message: '¡Buena suerte!' });
+                currentUser = data.updatedUser;
+                updateBalanceUI();
+                loadBets();
+                document.getElementById('betInput').value = '';
+                showSection('home');
+            } else iziToast.error({ title: 'Error', message: data.message || 'No se pudo registrar' });
         });
 
-        // Copiar enlace de referido
+        // Copy referral link
         document.getElementById('copyLinkBtn').addEventListener('click', () => {
             const link = document.getElementById('referralLink');
-            link.select();
-            document.execCommand('copy');
-            iziToast.success({ title: 'Copiado', message: 'Enlace copiado al portapapeles' });
+            link.select(); document.execCommand('copy');
+            iziToast.success({ title: 'Copiado', message: 'Enlace copiado' });
         });
 
-        // ADMIN: manejo de botones (simplificado, se puede expandir)
+        // Admin panel handling
         document.querySelectorAll('.admin-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 if (!isAdmin) return;
                 const action = e.currentTarget.dataset.admin;
                 const adminContent = document.getElementById('adminContent');
-                // Aquí se puede cargar contenido según acción
-                adminContent.innerHTML = '<p class="text-center text-gray-400">Función en construcción desde WebApp. Usa el bot para gestión completa.</p>';
+                if (action === 'pending-deposits') {
+                    const res = await fetch(`/api/admin/pending-deposits?userId=${currentUser.telegram_id}`);
+                    const data = await res.json();
+                    let html = '<h4 class="font-bold text-lg mb-2">Depósitos pendientes</h4>';
+                    if (data.length === 0) html += '<p>No hay.</p>';
+                    else data.forEach(d => {
+                        html += `<div class="bg-gray-800 p-2 rounded mb-2 text-sm">
+                                    <p>👤 ${d.users.first_name} (${d.user_id})</p>
+                                    <p>📎 <a href="${d.screenshot_url}" target="_blank">Ver captura</a></p>
+                                    <p>🆔 Solicitud: ${d.id}</p>
+                                    <button class="approve-deposit bg-green-600 px-3 py-1 rounded mt-1" data-id="${d.id}">Aprobar</button>
+                                    <button class="reject-deposit bg-red-600 px-3 py-1 rounded mt-1" data-id="${d.id}">Rechazar</button>
+                                </div>`;
+                    });
+                    adminContent.innerHTML = html;
+                    attachAdminButtons();
+                } else if (action === 'pending-withdraws') {
+                    const res = await fetch(`/api/admin/pending-withdraws?userId=${currentUser.telegram_id}`);
+                    const data = await res.json();
+                    let html = '<h4 class="font-bold text-lg mb-2">Retiros pendientes</h4>';
+                    if (data.length === 0) html += '<p>No hay.</p>';
+                    else data.forEach(w => {
+                        html += `<div class="bg-gray-800 p-2 rounded mb-2 text-sm">
+                                    <p>👤 ${w.users.first_name} (${w.user_id})</p>
+                                    <p>💰 ${w.amount_usd} USD - ${w.withdraw_methods?.name}</p>
+                                    <p>📞 ${w.account_info}</p>
+                                    <p>🆔 ${w.id}</p>
+                                    <button class="approve-withdraw bg-green-600 px-3 py-1 rounded mt-1" data-id="${w.id}">Aprobar</button>
+                                    <button class="reject-withdraw bg-red-600 px-3 py-1 rounded mt-1" data-id="${w.id}">Rechazar</button>
+                                </div>`;
+                    });
+                    adminContent.innerHTML = html;
+                    attachWithdrawButtons();
+                } else {
+                    adminContent.innerHTML = '<p class="text-gray-400">Función en desarrollo. Usa el bot para gestión completa.</p>';
+                }
             });
         });
 
-        // Iniciar todo
-        initAuth();
+        function attachAdminButtons() {
+            document.querySelectorAll('.approve-deposit').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = e.target.dataset.id;
+                    const amount = prompt('Monto a acreditar en USD (ej: 10):');
+                    if (!amount) return;
+                    const bonus = prompt('Bono adicional en USD (0 si no):') || 0;
+                    const res = await fetch(`/api/admin/approve-deposit/${id}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ amount_usd: parseFloat(amount), bonus_usd: parseFloat(bonus), userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) iziToast.success({ title: 'Aprobado', message: 'Depósito acreditado' });
+                    else iziToast.error({ title: 'Error', message: 'No se pudo aprobar' });
+                });
+            });
+            document.querySelectorAll('.reject-deposit').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = e.target.dataset.id;
+                    const res = await fetch(`/api/admin/reject-deposit/${id}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) iziToast.warning({ title: 'Rechazado', message: 'Depósito rechazado' });
+                });
+            });
+        }
 
+        function attachWithdrawButtons() {
+            document.querySelectorAll('.approve-withdraw').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = e.target.dataset.id;
+                    const res = await fetch(`/api/admin/approve-withdraw/${id}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) iziToast.success({ title: 'Aprobado', message: 'Retiro procesado' });
+                    else iziToast.error({ title: 'Error', message: 'No se pudo aprobar' });
+                });
+            });
+            document.querySelectorAll('.reject-withdraw').forEach(b => {
+                b.addEventListener('click', async (e) => {
+                    const id = e.target.dataset.id;
+                    const res = await fetch(`/api/admin/reject-withdraw/${id}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) iziToast.warning({ title: 'Rechazado', message: 'Retiro rechazado' });
+                });
+            });
+        }
+
+        initAuth();
     </script>
 </body>
 </html>
