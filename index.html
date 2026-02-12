@@ -513,19 +513,71 @@
     </div>
 
     <script>
-        // ========== CONFIGURACIÓN ==========
-        const SUPABASE_URL = 'https://tuproyecto.supabase.co';
-        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...';
-        const ADMIN_ID = 123456789; // <--- TU ID DE TELEGRAM
-        const BOT_USERNAME = 'TuBotUsername'; // para deep links
+        // ========== CONFIGURACIÓN INYECTADA DESDE EL SERVIDOR ==========
+        const SUPABASE_URL = '{{ SUPABASE_URL }}';
+        const SUPABASE_ANON_KEY = '{{ SUPABASE_ANON_KEY }}';
+        const ADMIN_ID = parseInt('{{ ADMIN_ID }}');
+        const BOT_USERNAME = '{{ BOT_USERNAME }}';
 
+        // ========== VERIFICACIÓN DE VARIABLES ==========
+        if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !ADMIN_ID || !BOT_USERNAME) {
+            console.error('❌ Faltan variables de entorno inyectadas por el servidor.');
+            document.body.innerHTML = '<div style="padding: 40px; text-align: center; color: red;">Error de configuración. Contacta al administrador.</div>';
+            throw new Error('Variables de entorno no inyectadas');
+        }
+
+        // ========== INICIALIZACIÓN DE SUPABASE ==========
         const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        const tg = window.Telegram.WebApp;
-        tg.ready();
-        tg.expand();
+
+        // ========== INICIALIZACIÓN DE TELEGRAM Y USUARIO ==========
+        const tg = window.Telegram?.WebApp;
+        let currentUser = {
+            id: null,
+            firstName: 'Jugador',
+            usd: 0,
+            cup: 0,
+            bonus: 0,
+            ref: null
+        };
+
+        // 🔍 Función para obtener el ID de usuario (Telegram + URL fallback)
+        function detectUserId() {
+            // 1. Intentar desde Telegram WebApp
+            if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                tg.ready();
+                tg.expand();
+                return {
+                    id: tg.initDataUnsafe.user.id,
+                    firstName: tg.initDataUnsafe.user.first_name || 'Jugador'
+                };
+            }
+
+            // 2. Intentar desde parámetros de URL (userId o startapp)
+            const urlParams = new URLSearchParams(window.location.search);
+            const userIdParam = urlParams.get('userId') || urlParams.get('startapp');
+            if (userIdParam && !isNaN(parseInt(userIdParam))) {
+                return {
+                    id: parseInt(userIdParam),
+                    firstName: 'Usuario ' + userIdParam
+                };
+            }
+
+            // 3. No se pudo obtener → redirigir al bot
+            window.location.href = `https://t.me/${BOT_USERNAME}?start=webapp`;
+            return null;
+        }
+
+        const userData = detectUserId();
+        if (userData) {
+            currentUser.id = userData.id;
+            currentUser.firstName = userData.firstName;
+            document.getElementById('userGreeting').innerText = `✨ Hola, ${currentUser.firstName}`;
+        } else {
+            // Si detectUserId redirige, detenemos la ejecución
+            throw new Error('Redirigiendo al bot...');
+        }
 
         // ========== ESTADO GLOBAL ==========
-        let currentUser = { id: null, firstName: 'Jugador', usd: 0, cup: 0, bonus: 0, ref: null };
         let exchangeRate = 110;
         let playPrices = {};
         let depositMethods = [];
@@ -539,47 +591,6 @@
         let selectedDepositMethod = null;
         let selectedWithdrawMethod = null;
         let depositCurrency = 'usd';
-
-        // ========== INICIALIZACIÓN ==========
-        (async function init() {
-            if (tg.initDataUnsafe?.user) {
-                currentUser.id = tg.initDataUnsafe.user.id;
-                currentUser.firstName = tg.initDataUnsafe.user.first_name || 'Jugador';
-            } else {
-                // Demo mode
-                currentUser.id = 123456789;
-                currentUser.firstName = 'Demo';
-            }
-            document.getElementById('userGreeting').innerText = `✨ Hola, ${currentUser.firstName}`;
-
-            await loadExchangeRate();
-            await loadPlayPrices();
-            await loadDepositMethods();
-            await loadWithdrawMethods();
-            await loadUserData();
-            await loadBets();
-            await loadTransactions();
-
-            // Si es admin, mostrar panel
-            if (currentUser.id === ADMIN_ID) {
-                document.getElementById('adminPanel').classList.remove('hidden');
-                renderAdminTab('depMethods');
-            }
-
-            // Eventos de tabs de admin
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.addEventListener('click', function(e) {
-                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                    this.classList.add('active');
-                    renderAdminTab(this.dataset.tab);
-                });
-            });
-
-            // Autorefresh cada 20 segundos
-            setInterval(() => { loadUserData(); loadBets(); loadTransactions(); }, 20000);
-
-            initTheme();
-        })();
 
         // ========== FUNCIONES DE CARGA (SUPABASE) ==========
         async function loadExchangeRate() {
@@ -695,6 +706,7 @@
                 if (selectedLottery === 'Georgia') checkGeorgiaTime();
             });
         });
+        
         document.querySelectorAll('#betTypeSelector .select-item').forEach(el => {
             el.addEventListener('click', function() {
                 document.querySelectorAll('#betTypeSelector .select-item').forEach(e => e.classList.remove('active'));
@@ -919,6 +931,7 @@
 
         // ========== TRANSFERENCIAS ==========
         window.showTransferModal = function() { openModal('transferModal'); };
+        
         window.submitTransfer = async function() {
             const target = parseInt(document.getElementById('transferTarget').value);
             const amount = parseFloat(document.getElementById('transferAmount').value);
@@ -1114,14 +1127,12 @@
             const { data: tx } = await supabase.from('transactions').select('*').eq('id', id).single();
             if (!tx) return;
             if (tx.type === 'deposit') {
-                const bonus = tx.amount_usd > 0 ? (70 / 110) : 0; // cup_to_usd simplificado
+                const bonus = tx.amount_usd > 0 ? (70 / 110) : 0;
                 await supabase.from('users').update({
                     usd: supabase.raw(`usd + ${tx.amount_usd}`),
                     cup: supabase.raw(`cup + ${tx.amount_cup}`),
                     bonus_usd: supabase.raw(`bonus_usd + ${bonus}`)
                 }).eq('user_id', tx.user_id);
-            } else if (tx.type === 'withdraw') {
-                // ya se descontó
             }
             await supabase.from('transactions').update({ status: 'approved' }).eq('id', id);
             renderAdminTab('transactions');
@@ -1132,7 +1143,6 @@
             const { data: tx } = await supabase.from('transactions').select('*').eq('id', id).single();
             if (!tx) return;
             if (tx.type === 'withdraw') {
-                // reembolsar
                 await supabase.from('users').update({ usd: supabase.raw(`usd + ${tx.amount_usd}`) }).eq('user_id', tx.user_id);
             }
             await supabase.from('transactions').update({ status: 'rejected' }).eq('id', id);
@@ -1149,6 +1159,7 @@
         // ========== UTILIDADES ==========
         function openModal(id) { document.getElementById(id).classList.add('active'); }
         window.closeModal = function(id) { document.getElementById(id).classList.remove('active'); };
+        
         function showMessage(text, title = '📢') {
             document.getElementById('messageTitle').innerText = title;
             document.getElementById('messageText').innerText = text;
@@ -1165,11 +1176,47 @@
                 btn.addEventListener('click', () => setTheme(btn.dataset.theme));
             });
         }
+        
         function setTheme(theme) {
             document.documentElement.setAttribute('data-theme', theme);
             localStorage.setItem('theme', theme);
             document.querySelectorAll('.theme-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.theme === theme));
         }
+
+        // ========== INICIALIZACIÓN ==========
+        (async function init() {
+            try {
+                await loadExchangeRate();
+                await loadPlayPrices();
+                await loadDepositMethods();
+                await loadWithdrawMethods();
+                await loadUserData();
+                await loadBets();
+                await loadTransactions();
+
+                // Si es admin, mostrar panel
+                if (currentUser.id === ADMIN_ID) {
+                    document.getElementById('adminPanel').classList.remove('hidden');
+                    renderAdminTab('depMethods');
+                }
+
+                // Eventos de tabs de admin
+                document.querySelectorAll('.tab').forEach(tab => {
+                    tab.addEventListener('click', function(e) {
+                        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                        this.classList.add('active');
+                        renderAdminTab(this.dataset.tab);
+                    });
+                });
+
+                // Autorefresh cada 20 segundos
+                setInterval(() => { loadUserData(); loadBets(); loadTransactions(); }, 20000);
+
+                initTheme();
+            } catch (e) {
+                console.error('Error en inicialización:', e);
+            }
+        })();
     </script>
 </body>
 </html>
