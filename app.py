@@ -2,13 +2,13 @@
 # -*- coding: utf-8 -*-
 """
 Servidor Web + Bot de Rifas Cuba
-Versión corregida - Sirve index.html desde la raíz
+Con renderizado de plantilla para inyectar variables de entorno
 """
 
 import os
 import threading
 import logging
-from flask import Flask, send_from_directory, abort
+from flask import Flask, render_template_string
 
 # Importar el bot
 import bot_rifas_cuba
@@ -20,25 +20,28 @@ logger = logging.getLogger(__name__)
 # Crear aplicación Flask
 app = Flask(__name__)
 
-# Ruta principal: sirve index.html
+# Cargar el contenido del index.html
+with open('index.html', 'r', encoding='utf-8') as f:
+    INDEX_HTML = f.read()
+
 @app.route('/')
 def serve_webapp():
-    try:
-        # Busca index.html en el directorio actual
-        return send_from_directory('.', 'index.html')
-    except Exception as e:
-        logger.error(f"Error sirviendo index.html: {e}")
-        abort(404)
+    """Sirve la WebApp con las variables de entorno inyectadas."""
+    # Obtener variables del entorno (ya cargadas por python-dotenv en el bot)
+    supabase_url = os.environ.get('SUPABASE_URL', '')
+    supabase_key = os.environ.get('SUPABASE_KEY', '')
+    admin_id = os.environ.get('ADMIN_ID', '0')
+    bot_username = os.environ.get('BOT_USERNAME', '')  # ⚠️ NUEVA VARIABLE
+    
+    # Renderizar el HTML reemplazando los placeholders
+    rendered = INDEX_HTML.replace('{{ SUPABASE_URL }}', supabase_url) \
+                         .replace('{{ SUPABASE_ANON_KEY }}', supabase_key) \
+                         .replace('{{ ADMIN_ID }}', admin_id) \
+                         .replace('{{ BOT_USERNAME }}', bot_username)
+    
+    return rendered
 
-# Ruta para archivos estáticos (si los hay)
-@app.route('/<path:path>')
-def serve_static(path):
-    try:
-        return send_from_directory('.', path)
-    except Exception:
-        abort(404)
-
-# Health check para Render (opcional pero recomendado)
+# Ruta opcional para health check
 @app.route('/health')
 def health():
     return 'OK', 200
@@ -53,10 +56,9 @@ if __name__ == '__main__':
     bot_thread = threading.Thread(target=start_bot, daemon=True)
     bot_thread.start()
     logger.info("✅ Bot lanzado en segundo plano")
-
+    
     # Obtener puerto de Render (variable de entorno PORT)
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🌐 Servidor Flask corriendo en puerto {port}")
-
-    # Iniciar servidor Flask
+    
     app.run(host='0.0.0.0', port=port, debug=False)
