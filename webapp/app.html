@@ -4,18 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>🎰 Rifas Cuba · WebApp</title>
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Font Awesome 6 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <!-- Google Fonts: Poppins -->
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <!-- Anime.js -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
-    <!-- iziToast -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/izitoast@1.4.0/dist/css/iziToast.min.css">
     <script src="https://cdn.jsdelivr.net/npm/izitoast@1.4.0/dist/js/iziToast.min.js"></script>
-    <!-- Telegram WebApp SDK -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <style>
         body {
@@ -69,25 +63,6 @@
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        .admin-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .admin-table th, .admin-table td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid rgba(255,255,255,0.2);
-        }
-        .admin-table th {
-            font-weight: 600;
-            color: #a5f3fc;
-        }
-        .admin-btn-small {
-            padding: 5px 10px;
-            border-radius: 8px;
-            font-size: 0.8rem;
-            margin: 0 2px;
-        }
         .modal {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -112,7 +87,7 @@
     <div id="app" class="max-w-4xl mx-auto relative">
 
         <!-- Header -->
-        <div class="flex items-center justify-between mb-6 animate__animated animate__fadeInDown">
+        <div class="flex items-center justify-between mb-6">
             <div class="flex items-center space-x-3">
                 <div class="w-12 h-12 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 flex items-center justify-center shadow-lg">
                     <i class="fas fa-dice text-white text-2xl"></i>
@@ -166,10 +141,10 @@
 
             <!-- Contenedor de secciones -->
             <div id="sectionsContainer" class="mt-4 mb-24">
-                <!-- SECCIÓN HOME (sin cambios) -->
+
+                <!-- SECCIÓN HOME -->
                 <div id="section-home" class="section active-section">
-                    <!-- ... contenido previo ... -->
-                    <div class="glass-card p-6 text-center animate__animated animate__fadeInUp">
+                    <div class="glass-card p-6 text-center">
                         <div class="w-24 h-24 mx-auto bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center mb-4 shadow-2xl animate-pulse-slow">
                             <i class="fas fa-dice-d6 text-5xl text-white"></i>
                         </div>
@@ -190,57 +165,183 @@
                     </div>
                 </div>
 
-                <!-- SECCIÓN JUGAR (sin cambios funcionales, se omite por brevedad, pero debe mantenerse igual) -->
+                <!-- SECCIÓN JUGAR -->
                 <div id="section-play" class="section hidden-section">
-                    <!-- ... mismo contenido que antes ... -->
+                    <div class="glass-card p-5">
+                        <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-dice mr-3 text-cyan-300"></i>Elige lotería</h3>
+                        <div class="grid grid-cols-3 gap-3 mb-6">
+                            <button data-lottery="Florida" class="lottery-btn bg-gradient-to-br from-red-500 to-orange-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition">
+                                <i class="fas fa-umbrella-beach text-3xl mb-2"></i>
+                                <span class="block font-bold">Florida</span>
+                            </button>
+                            <button data-lottery="Georgia" class="lottery-btn bg-gradient-to-br from-green-600 to-teal-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition">
+                                <i class="fas fa-peach text-3xl mb-2"></i>
+                                <span class="block font-bold">Georgia</span>
+                            </button>
+                            <button data-lottery="Nueva York" class="lottery-btn bg-gradient-to-br from-blue-700 to-indigo-800 p-4 rounded-2xl shadow-lg hover:scale-105 transition">
+                                <i class="fas fa-city text-3xl mb-2"></i>
+                                <span class="block font-bold">New York</span>
+                            </button>
+                        </div>
+                        
+                        <div id="betTypeContainer" class="hidden">
+                            <h4 class="text-xl font-semibold mb-3">Tipo de jugada</h4>
+                            <div class="grid grid-cols-2 gap-3 mb-4">
+                                <button data-type="fijo" class="type-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">🎯 Fijo</button>
+                                <button data-type="corridos" class="type-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">🏃 Corridos</button>
+                                <button data-type="centena" class="type-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700">💯 Centena</button>
+                                <button data-type="parle" class="type-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700">🔒 Parle</button>
+                            </div>
+                        </div>
+
+                        <div id="betFormContainer" class="hidden">
+                            <label class="block mb-2 font-medium">✍️ Escribe tus números (ej: 12 con 1 usd):</label>
+                            <textarea id="betInput" rows="3" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 focus:ring-2 focus:ring-cyan-400"></textarea>
+                            <button id="submitBetBtn" class="mt-4 w-full bg-gradient-to-r from-cyan-500 to-blue-600 py-3 rounded-xl font-bold text-lg shadow-lg btn-glow">
+                                <i class="fas fa-check-circle mr-2"></i>Registrar apuesta
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
-                <!-- SECCIÓN MI DINERO (sin cambios) -->
-                <div id="section-wallet" class="section hidden-section"><!-- ... --></div>
+                <!-- SECCIÓN MI DINERO (WALLET) -->
+                <div id="section-wallet" class="section hidden-section">
+                    <div class="glass-card p-5">
+                        <h3 class="text-2xl font-bold mb-4">💰 Mi saldo</h3>
+                        <div class="grid grid-cols-2 gap-4 mb-6">
+                            <div class="bg-gradient-to-br from-yellow-500 to-yellow-700 p-4 rounded-2xl text-center shadow-xl">
+                                <p class="text-sm opacity-90">USD</p>
+                                <p id="walletUsd" class="text-3xl font-bold">0.00</p>
+                            </div>
+                            <div class="bg-gradient-to-br from-green-500 to-green-700 p-4 rounded-2xl text-center shadow-xl">
+                                <p class="text-sm opacity-90">CUP</p>
+                                <p id="walletCup" class="text-3xl font-bold">0.00</p>
+                            </div>
+                            <div class="col-span-2 bg-blue-900/50 p-4 rounded-2xl text-center">
+                                <p class="text-sm">🎁 Bono (no retirable)</p>
+                                <p id="walletBonus" class="text-2xl font-semibold text-cyan-300">0.00 USD</p>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-3 gap-3">
+                            <button id="rechargeBtn" class="bg-indigo-600 p-3 rounded-xl hover:bg-indigo-700 transition">
+                                <i class="fas fa-arrow-down mr-1"></i> Recargar
+                            </button>
+                            <button id="withdrawBtn" class="bg-pink-600 p-3 rounded-xl hover:bg-pink-700 transition">
+                                <i class="fas fa-arrow-up mr-1"></i> Retirar
+                            </button>
+                            <button id="transferBtn" class="bg-gray-600 p-3 rounded-xl hover:bg-gray-700 transition">
+                                <i class="fas fa-exchange-alt mr-1"></i> Transferir
+                            </button>
+                        </div>
 
-                <!-- SECCIÓN MIS JUGADAS (sin cambios) -->
-                <div id="section-bets" class="section hidden-section"><!-- ... --></div>
+                        <!-- Subsección de recarga (simple, solo monto) -->
+                        <div id="rechargeSection" class="hidden mt-6">
+                            <h4 class="text-xl font-semibold mb-3">📥 Recargar saldo</h4>
+                            <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                                <option value="">Selecciona método...</option>
+                            </select>
+                            <div id="methodDetails" class="bg-gray-800/80 p-4 rounded-xl text-sm mb-4 hidden">
+                                <p><span class="font-bold">Número:</span> <span id="methodCard"></span></p>
+                                <p><span class="font-bold">Confirmar:</span> <span id="methodConfirm"></span></p>
+                            </div>
+                            <label class="block mb-2">💵 Envía el monto transferido (ej: 10 usd o 500 cup):</label>
+                            <input type="text" id="depositAmount" placeholder="Ej: 10 usd" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                            <button id="submitDepositBtn" class="w-full bg-green-600 py-2 rounded-xl font-semibold hover:bg-green-700" disabled>
+                                Confirmar depósito
+                            </button>
+                        </div>
 
-                <!-- SECCIÓN REFERIDOS (sin cambios) -->
-                <div id="section-referrals" class="section hidden-section"><!-- ... --></div>
+                        <!-- Subsección de retiro -->
+                        <div id="withdrawSection" class="hidden mt-6">
+                            <h4 class="text-xl font-semibold mb-3">📤 Retirar fondos</h4>
+                            <select id="withdrawMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                                <option value="">Selecciona método...</option>
+                            </select>
+                            <input type="text" id="withdrawAccount" placeholder="Número de cuenta / tarjeta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                            <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-2 rounded-xl font-semibold hover:bg-pink-700">
+                                Solicitar retiro (todo el saldo USD)
+                            </button>
+                        </div>
 
-                <!-- ========== SECCIÓN ADMIN (COMPLETAMENTE FUNCIONAL) ========== -->
+                        <!-- Subsección de transferencia -->
+                        <div id="transferSection" class="hidden mt-6">
+                            <h4 class="text-xl font-semibold mb-3">🔄 Transferir a otro usuario</h4>
+                            <input type="number" id="transferTarget" placeholder="ID de Telegram del destinatario" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-purple-500 mb-3">
+                            <input type="number" id="transferAmount" placeholder="Monto en USD" step="0.01" min="0.01" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-purple-500 mb-3">
+                            <button id="submitTransferBtn" class="w-full bg-purple-600 py-2 rounded-xl font-semibold hover:bg-purple-700">
+                                Transferir
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SECCIÓN MIS JUGADAS -->
+                <div id="section-bets" class="section hidden-section">
+                    <div class="glass-card p-5">
+                        <h3 class="text-2xl font-bold mb-4">📋 Historial de apuestas</h3>
+                        <div id="betsList" class="space-y-3">
+                            <p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SECCIÓN REFERIDOS -->
+                <div id="section-referrals" class="section hidden-section">
+                    <div class="glass-card p-5">
+                        <h3 class="text-2xl font-bold mb-4">👥 Invita y gana</h3>
+                        <div class="bg-gradient-to-r from-yellow-600/30 to-pink-600/30 p-5 rounded-2xl text-center mb-4">
+                            <i class="fas fa-gift text-5xl text-yellow-300 mb-3"></i>
+                            <p class="text-lg font-bold">¡Gana comisión de por vida!</p>
+                            <p class="text-sm">5% de cada apuesta de tus referidos</p>
+                        </div>
+                        <div class="bg-gray-800/60 p-4 rounded-xl mb-4">
+                            <p class="text-sm text-gray-300 mb-1">Tu enlace de referido:</p>
+                            <div class="flex">
+                                <input id="referralLink" type="text" readonly class="flex-1 bg-gray-900 p-2 rounded-l-xl text-xs text-cyan-300" value="Cargando...">
+                                <button id="copyLinkBtn" class="bg-cyan-600 px-4 rounded-r-xl hover:bg-cyan-700">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="font-semibold">Total referidos:</span>
+                            <span id="referralCount" class="text-2xl font-bold text-yellow-400">0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ========== SECCIÓN ADMIN (SIMPLIFICADA) ========== -->
                 <div id="section-admin" class="section hidden-section">
                     <div class="glass-card p-5">
                         <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-crown text-yellow-400 mr-2"></i>Panel Admin</h3>
                         
-                        <!-- Botones de navegación interna del panel -->
                         <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
-                            <button data-admin-view="depositMethods" class="admin-nav-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700 transition">
-                                <i class="fas fa-money-bill-wave mr-1"></i> Métodos Depósito
+                            <button data-admin-view="addDeposit" class="admin-nav-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">
+                                <i class="fas fa-plus mr-1"></i> Añadir Depósito
                             </button>
-                            <button data-admin-view="withdrawMethods" class="admin-nav-btn bg-pink-600/80 p-3 rounded-xl hover:bg-pink-700 transition">
-                                <i class="fas fa-credit-card mr-1"></i> Métodos Retiro
+                            <button data-admin-view="addWithdraw" class="admin-nav-btn bg-pink-600/80 p-3 rounded-xl hover:bg-pink-700">
+                                <i class="fas fa-plus mr-1"></i> Añadir Retiro
                             </button>
-                            <button data-admin-view="exchangeRate" class="admin-nav-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700 transition">
+                            <button data-admin-view="setRate" class="admin-nav-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">
                                 <i class="fas fa-dollar-sign mr-1"></i> Tasa de Cambio
                             </button>
-                            <button data-admin-view="playPrices" class="admin-nav-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700 transition">
+                            <button data-admin-view="setPrices" class="admin-nav-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700">
                                 <i class="fas fa-dice mr-1"></i> Precios Jugadas
                             </button>
-                            <button data-admin-view="pendingDeposits" class="admin-nav-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700 transition">
-                                <i class="fas fa-hourglass-half mr-1"></i> Dep. Pendientes
+                            <button data-admin-view="viewData" class="admin-nav-btn bg-gray-600/80 p-3 rounded-xl hover:bg-gray-700">
+                                <i class="fas fa-eye mr-1"></i> Ver Datos
                             </button>
-                            <button data-admin-view="pendingWithdraws" class="admin-nav-btn bg-orange-600/80 p-3 rounded-xl hover:bg-orange-700 transition">
-                                <i class="fas fa-hourglass-half mr-1"></i> Ret. Pendientes
-                            </button>
-                            <button data-admin-view="openSession" class="admin-nav-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700 transition">
+                            <button data-admin-view="openSession" class="admin-nav-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700">
                                 <i class="fas fa-calendar-plus mr-1"></i> Abrir Sesión
                             </button>
-                            <button data-admin-view="winningNumbers" class="admin-nav-btn bg-teal-600/80 p-3 rounded-xl hover:bg-teal-700 transition">
+                            <button data-admin-view="publishWinning" class="admin-nav-btn bg-teal-600/80 p-3 rounded-xl hover:bg-teal-700">
                                 <i class="fas fa-trophy mr-1"></i> Números Ganadores
                             </button>
                         </div>
 
-                        <!-- Contenedor donde se renderiza la vista activa del admin -->
+                        <!-- Contenedor de la vista activa -->
                         <div id="adminViewContainer" class="mt-4">
-                            <!-- Se llenará dinámicamente con JS -->
-                            <p class="text-center text-gray-400">Selecciona una opción para gestionar</p>
+                            <p class="text-center text-gray-400">Selecciona una opción</p>
                         </div>
                     </div>
                 </div>
@@ -248,7 +349,7 @@
         </div>
     </div>
 
-    <!-- MODAL GENÉRICO PARA CONFIRMACIONES / EDICIONES -->
+    <!-- MODAL GENÉRICO -->
     <div id="adminModal" class="modal hidden" onclick="if(event.target===this) this.classList.add('hidden')">
         <div class="modal-content">
             <div id="modalBody"></div>
@@ -256,13 +357,11 @@
     </div>
 
     <script>
-        // ------------------------------------------------------------
-        // INICIALIZACIÓN Y ESTADO GLOBAL
-        // ------------------------------------------------------------
         const TG = window.Telegram.WebApp;
         TG.ready();
         TG.expand();
 
+        // Estado global
         let currentUser = null;
         let isAdmin = false;
         let exchangeRate = 110;
@@ -282,7 +381,7 @@
         const modalBody = document.getElementById('modalBody');
 
         // ------------------------------------------------------------
-        // AUTENTICACIÓN Y CARGA INICIAL
+        // AUTENTICACIÓN
         // ------------------------------------------------------------
         async function initAuth() {
             try {
@@ -312,18 +411,14 @@
                 globalLoader.classList.add('hidden');
                 mainContent.classList.remove('hidden');
 
-                // Cargar datos necesarios para admin
                 await loadDepositMethods();
                 await loadWithdrawMethods();
                 await loadPlayPrices();
                 await loadExchangeRate();
-
-                // Cargar datos para usuario normal
                 loadBets();
                 loadReferralStats();
 
-                // Animación
-                anime({ targets: '.glass-card', opacity: [0,1], translateY: [20,0], duration: 800, easing: 'easeOutQuad' });
+                anime({ targets: '.glass-card', opacity: [0,1], translateY: [20,0], duration: 800 });
 
             } catch (e) {
                 console.error(e);
@@ -333,7 +428,7 @@
         }
 
         // ------------------------------------------------------------
-        // FUNCIONES DE ACTUALIZACIÓN UI (usuario normal)
+        // FUNCIONES DE ACTUALIZACIÓN UI
         // ------------------------------------------------------------
         function updateBalanceUI() {
             if (!currentUser) return;
@@ -346,13 +441,12 @@
         }
 
         // ------------------------------------------------------------
-        // FUNCIONES DE CARGA DE DATOS (compartidas)
+        // CARGA DE DATOS
         // ------------------------------------------------------------
         async function loadDepositMethods() {
             try {
                 const res = await fetch('/api/deposit-methods');
                 depositMethods = await res.json();
-                // También actualizar select de recarga si existe
                 const select = document.getElementById('depositMethodSelect');
                 if (select) {
                     select.innerHTML = '<option value="">Selecciona método...</option>';
@@ -398,438 +492,46 @@
             } catch (e) {}
         }
 
-        // ------------------------------------------------------------
-        // FUNCIONES ADMIN: RENDERIZADO DE CADA VISTA
-        // ------------------------------------------------------------
-        function showAdminView(viewName) {
-            if (!isAdmin) return;
-            switch(viewName) {
-                case 'depositMethods': renderDepositMethodsView(); break;
-                case 'withdrawMethods': renderWithdrawMethodsView(); break;
-                case 'exchangeRate': renderExchangeRateView(); break;
-                case 'playPrices': renderPlayPricesView(); break;
-                case 'pendingDeposits': renderPendingDepositsView(); break;
-                case 'pendingWithdraws': renderPendingWithdrawsView(); break;
-                case 'openSession': renderOpenSessionView(); break;
-                case 'winningNumbers': renderWinningNumbersView(); break;
-                default: adminViewContainer.innerHTML = '<p class="text-center text-gray-400">Selecciona una opción</p>';
-            }
-        }
-
-        // ----- 1. Métodos de Depósito -----
-        function renderDepositMethodsView() {
-            let html = `
-                <div class="flex justify-between items-center mb-4">
-                    <h4 class="text-xl font-semibold">📥 Métodos de Depósito</h4>
-                    <button id="addDepositMethodBtn" class="bg-green-600 px-4 py-2 rounded-xl text-sm hover:bg-green-700">
-                        <i class="fas fa-plus mr-1"></i>Nuevo
-                    </button>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="admin-table">
-                        <thead>
-                            <tr><th>ID</th><th>Nombre</th><th>Número</th><th>Confirmar</th><th>Acciones</th></tr>
-                        </thead>
-                        <tbody>
-            `;
-            depositMethods.forEach(m => {
-                html += `<tr>
-                    <td>${m.id}</td>
-                    <td>${m.name}</td>
-                    <td>${m.card}</td>
-                    <td>${m.confirm}</td>
-                    <td>
-                        <button onclick="editDepositMethod(${m.id})" class="admin-btn-small bg-yellow-600 hover:bg-yellow-700"><i class="fas fa-edit"></i></button>
-                        <button onclick="deleteDepositMethod(${m.id})" class="admin-btn-small bg-red-600 hover:bg-red-700"><i class="fas fa-trash"></i></button>
-                    </td>
-                </tr>`;
-            });
-            html += `</tbody></table></div>`;
-            adminViewContainer.innerHTML = html;
-            document.getElementById('addDepositMethodBtn').addEventListener('click', showAddDepositMethodModal);
-        }
-
-        window.editDepositMethod = async function(id) {
-            const method = depositMethods.find(m => m.id === id);
-            if (!method) return;
-            const formHtml = `
-                <h3 class="text-xl font-bold mb-4">✏️ Editar Método de Depósito</h3>
-                <input type="text" id="editDepName" value="${method.name}" placeholder="Nombre" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <input type="text" id="editDepCard" value="${method.card}" placeholder="Número/Cuenta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <input type="text" id="editDepConfirm" value="${method.confirm}" placeholder="Confirmar" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <div class="flex gap-3">
-                    <button id="saveDepBtn" class="flex-1 bg-green-600 py-2 rounded-xl hover:bg-green-700">Guardar</button>
-                    <button onclick="closeModal()" class="flex-1 bg-gray-600 py-2 rounded-xl hover:bg-gray-700">Cancelar</button>
-                </div>
-            `;
-            modalBody.innerHTML = formHtml;
-            adminModal.classList.remove('hidden');
-            document.getElementById('saveDepBtn').addEventListener('click', async () => {
-                const name = document.getElementById('editDepName').value.trim();
-                const card = document.getElementById('editDepCard').value.trim();
-                const confirm = document.getElementById('editDepConfirm').value.trim();
-                if (!name || !card || !confirm) return iziToast.warning({ message: 'Todos los campos son obligatorios' });
-                try {
-                    const res = await fetch(`/api/admin/deposit-methods/${id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name, card, confirm, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) {
-                        iziToast.success({ message: 'Método actualizado' });
-                        closeModal();
-                        await loadDepositMethods();
-                        renderDepositMethodsView();
-                    } else {
-                        iziToast.error({ message: 'Error al actualizar' });
-                    }
-                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-            });
-        };
-
-        window.deleteDepositMethod = async function(id) {
-            if (!confirm('¿Eliminar este método de depósito?')) return;
+        async function loadBets() {
+            if (!currentUser) return;
             try {
-                const res = await fetch(`/api/admin/deposit-methods/${id}`, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: currentUser.telegram_id })
-                });
-                if (res.ok) {
-                    iziToast.success({ message: 'Método eliminado' });
-                    await loadDepositMethods();
-                    renderDepositMethodsView();
+                const res = await fetch(`/api/user/${currentUser.telegram_id}/bets?limit=5`);
+                const bets = await res.json();
+                const container = document.getElementById('betsList');
+                if (bets.length === 0) {
+                    container.innerHTML = '<p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p>';
                 } else {
-                    iziToast.error({ message: 'Error al eliminar' });
-                }
-            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-        };
-
-        function showAddDepositMethodModal() {
-            const formHtml = `
-                <h3 class="text-xl font-bold mb-4">➕ Nuevo Método de Depósito</h3>
-                <input type="text" id="newDepName" placeholder="Nombre" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <input type="text" id="newDepCard" placeholder="Número/Cuenta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <input type="text" id="newDepConfirm" placeholder="Confirmar" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <div class="flex gap-3">
-                    <button id="saveNewDepBtn" class="flex-1 bg-green-600 py-2 rounded-xl hover:bg-green-700">Crear</button>
-                    <button onclick="closeModal()" class="flex-1 bg-gray-600 py-2 rounded-xl hover:bg-gray-700">Cancelar</button>
-                </div>
-            `;
-            modalBody.innerHTML = formHtml;
-            adminModal.classList.remove('hidden');
-            document.getElementById('saveNewDepBtn').addEventListener('click', async () => {
-                const name = document.getElementById('newDepName').value.trim();
-                const card = document.getElementById('newDepCard').value.trim();
-                const confirm = document.getElementById('newDepConfirm').value.trim();
-                if (!name || !card || !confirm) return iziToast.warning({ message: 'Todos los campos son obligatorios' });
-                try {
-                    const res = await fetch('/api/admin/deposit-methods', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ name, card, confirm, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) {
-                        iziToast.success({ message: 'Método creado' });
-                        closeModal();
-                        await loadDepositMethods();
-                        renderDepositMethodsView();
-                    } else {
-                        iziToast.error({ message: 'Error al crear' });
-                    }
-                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-            });
-        }
-
-        // ----- 2. Métodos de Retiro (análogo a depósito, se omite por brevedad pero se implementa similar) -----
-        // Se implementa de forma simétrica; por espacio se resume, pero en el archivo real debe estar completo.
-        function renderWithdrawMethodsView() {
-            let html = `
-                <div class="flex justify-between items-center mb-4">
-                    <h4 class="text-xl font-semibold">📤 Métodos de Retiro</h4>
-                    <button id="addWithdrawMethodBtn" class="bg-green-600 px-4 py-2 rounded-xl text-sm hover:bg-green-700">
-                        <i class="fas fa-plus mr-1"></i>Nuevo
-                    </button>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="admin-table">
-                        <thead><tr><th>ID</th><th>Nombre</th><th>Instrucción</th><th>Confirmar</th><th>Acciones</th></tr></thead>
-                        <tbody>
-            `;
-            withdrawMethods.forEach(m => {
-                html += `<tr>
-                    <td>${m.id}</td>
-                    <td>${m.name}</td>
-                    <td>${m.card}</td>
-                    <td>${m.confirm}</td>
-                    <td>
-                        <button onclick="editWithdrawMethod(${m.id})" class="admin-btn-small bg-yellow-600"><i class="fas fa-edit"></i></button>
-                        <button onclick="deleteWithdrawMethod(${m.id})" class="admin-btn-small bg-red-600"><i class="fas fa-trash"></i></button>
-                    </td>
-                </tr>`;
-            });
-            html += `</tbody></table></div>`;
-            adminViewContainer.innerHTML = html;
-            document.getElementById('addWithdrawMethodBtn').addEventListener('click', showAddWithdrawMethodModal);
-        }
-        // Se deben definir window.editWithdrawMethod, deleteWithdrawMethod, showAddWithdrawMethodModal de manera análoga.
-        // Por brevedad en esta respuesta se indica que se implementan igual que depósitos, pero en el código final se incluyen.
-
-        // ----- 3. Tasa de Cambio -----
-        function renderExchangeRateView() {
-            const html = `
-                <h4 class="text-xl font-semibold mb-4">💰 Tasa de Cambio USD/CUP</h4>
-                <p class="mb-2">Tasa actual: <span class="text-cyan-300 font-bold">1 USD = ${exchangeRate} CUP</span></p>
-                <div class="flex gap-3 items-end">
-                    <div class="flex-1">
-                        <label class="block text-sm mb-1">Nueva tasa:</label>
-                        <input type="number" id="newRate" value="${exchangeRate}" step="0.01" min="1" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-green-500">
-                    </div>
-                    <button id="updateRateBtn" class="bg-green-600 px-6 py-3 rounded-xl hover:bg-green-700">Actualizar</button>
-                </div>
-            `;
-            adminViewContainer.innerHTML = html;
-            document.getElementById('updateRateBtn').addEventListener('click', async () => {
-                const rate = parseFloat(document.getElementById('newRate').value);
-                if (isNaN(rate) || rate <= 0) return iziToast.warning({ message: 'Tasa inválida' });
-                try {
-                    const res = await fetch('/api/admin/exchange-rate', {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ rate, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) {
-                        exchangeRate = rate;
-                        iziToast.success({ message: 'Tasa actualizada' });
-                    } else {
-                        iziToast.error({ message: 'Error al actualizar' });
-                    }
-                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-            });
-        }
-
-        // ----- 4. Precios de Jugadas -----
-        function renderPlayPricesView() {
-            let html = `<h4 class="text-xl font-semibold mb-4">🎲 Precios por Jugada</h4>`;
-            playPrices.forEach(p => {
-                html += `
-                    <div class="flex items-center gap-3 mb-3 bg-gray-800/50 p-3 rounded-xl">
-                        <span class="w-24 font-bold">${p.bet_type}</span>
-                        <input type="number" id="price_cup_${p.bet_type}" value="${p.amount_cup}" placeholder="CUP" step="0.01" min="0" class="flex-1 p-2 rounded-lg bg-gray-700 text-white">
-                        <input type="number" id="price_usd_${p.bet_type}" value="${p.amount_usd}" placeholder="USD" step="0.01" min="0" class="flex-1 p-2 rounded-lg bg-gray-700 text-white">
-                        <button onclick="updatePlayPrice('${p.bet_type}')" class="bg-blue-600 px-4 py-2 rounded-lg hover:bg-blue-700">Actualizar</button>
-                    </div>
-                `;
-            });
-            adminViewContainer.innerHTML = html;
-        }
-
-        window.updatePlayPrice = async function(betType) {
-            const cup = parseFloat(document.getElementById(`price_cup_${betType}`).value);
-            const usd = parseFloat(document.getElementById(`price_usd_${betType}`).value);
-            if (isNaN(cup) || isNaN(usd) || cup < 0 || usd < 0) return iziToast.warning({ message: 'Montos inválidos' });
-            try {
-                const res = await fetch(`/api/admin/play-prices/${betType}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount_cup: cup, amount_usd: usd, userId: currentUser.telegram_id })
-                });
-                if (res.ok) {
-                    iziToast.success({ message: 'Precio actualizado' });
-                    await loadPlayPrices();
-                } else {
-                    iziToast.error({ message: 'Error al actualizar' });
-                }
-            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-        };
-
-        // ----- 5. Depósitos Pendientes -----
-        async function renderPendingDepositsView() {
-            adminViewContainer.innerHTML = '<p class="text-center"><i class="fas fa-spinner fa-spin"></i> Cargando solicitudes...</p>';
-            try {
-                const res = await fetch('/api/admin/pending-deposits', {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: currentUser.telegram_id }) // El middleware espera userId en body, pero GET no tiene body. Solución: enviar como query param o modificar backend. Por simplicidad, usamos POST.
-                });
-                // Como GET no acepta body fácilmente, mejor usar POST
-                const postRes = await fetch('/api/admin/pending-deposits', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: currentUser.telegram_id })
-                });
-                const deposits = await postRes.json();
-                let html = `<h4 class="text-xl font-semibold mb-4">📥 Depósitos Pendientes</h4>`;
-                if (deposits.length === 0) html += '<p class="text-gray-400">No hay solicitudes pendientes.</p>';
-                else {
-                    html += `<div class="space-y-3">`;
-                    deposits.forEach(d => {
-                        html += `
-                            <div class="bg-gray-800/70 p-4 rounded-xl">
-                                <div class="flex justify-between">
+                    let html = '';
+                    bets.forEach(b => {
+                        html += `<div class="bg-gray-800/50 p-3 rounded-xl flex justify-between items-center">
                                     <div>
-                                        <p><span class="font-bold">Usuario:</span> ${d.users.first_name} (${d.user_id})</p>
-                                        <p><span class="font-bold">Método:</span> ${d.deposit_methods.name}</p>
-                                        <p><span class="font-bold">Fecha:</span> ${new Date(d.created_at).toLocaleString()}</p>
-                                        <a href="${d.screenshot_url}" target="_blank" class="text-cyan-300 underline">Ver captura</a>
+                                        <span class="font-bold">🎰 ${b.lottery} - ${b.bet_type}</span>
+                                        <p class="text-xs text-gray-400">${new Date(b.placed_at).toLocaleString()}</p>
                                     </div>
-                                    <div class="flex flex-col gap-2">
-                                        <button onclick="approveDeposit(${d.id})" class="bg-green-600 px-4 py-1 rounded-lg text-sm hover:bg-green-700">✅ Aprobar</button>
-                                        <button onclick="rejectDeposit(${d.id})" class="bg-red-600 px-4 py-1 rounded-lg text-sm hover:bg-red-700">❌ Rechazar</button>
+                                    <div class="text-right">
+                                        <span class="text-cyan-300">${b.cost_usd} USD</span>
+                                        <span class="text-gray-400 text-xs block">${b.cost_cup} CUP</span>
                                     </div>
-                                </div>
-                            </div>
-                        `;
+                                </div>`;
                     });
-                    html += `</div>`;
+                    container.innerHTML = html;
                 }
-                adminViewContainer.innerHTML = html;
-            } catch (e) {
-                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar solicitudes.</p>';
-                console.error(e);
-            }
+            } catch (e) {}
         }
 
-        window.approveDeposit = async function(requestId) {
-            // Mostrar modal para ingresar monto y bono
-            const bonusDefault = (70 / exchangeRate).toFixed(2);
-            const modalContent = `
-                <h3 class="text-xl font-bold mb-4">✅ Aprobar Depósito #${requestId}</h3>
-                <input type="number" id="approveAmount" placeholder="Monto USD" step="0.01" min="0.01" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-green-500 mb-3">
-                <input type="number" id="approveBonus" placeholder="Bono USD" step="0.01" min="0" value="${bonusDefault}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-green-500 mb-3">
-                <div class="flex gap-3">
-                    <button id="confirmApproveBtn" class="flex-1 bg-green-600 py-2 rounded-xl hover:bg-green-700">Aprobar</button>
-                    <button onclick="closeModal()" class="flex-1 bg-gray-600 py-2 rounded-xl hover:bg-gray-700">Cancelar</button>
-                </div>
-            `;
-            modalBody.innerHTML = modalContent;
-            adminModal.classList.remove('hidden');
-            document.getElementById('confirmApproveBtn').addEventListener('click', async () => {
-                const amount = parseFloat(document.getElementById('approveAmount').value);
-                const bonus = parseFloat(document.getElementById('approveBonus').value) || 0;
-                if (isNaN(amount) || amount <= 0) return iziToast.warning({ message: 'Monto inválido' });
-                try {
-                    const res = await fetch(`/api/admin/approve-deposit/${requestId}`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ amount_usd: amount, bonus_usd: bonus, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) {
-                        iziToast.success({ message: 'Depósito aprobado y acreditado' });
-                        closeModal();
-                        renderPendingDepositsView(); // recargar
-                    } else {
-                        iziToast.error({ message: 'Error al aprobar' });
-                    }
-                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-            });
-        };
-
-        window.rejectDeposit = async function(requestId) {
-            if (!confirm('¿Rechazar este depósito?')) return;
+        async function loadReferralStats() {
+            if (!currentUser) return;
             try {
-                const res = await fetch(`/api/admin/reject-deposit/${requestId}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: currentUser.telegram_id })
-                });
-                if (res.ok) {
-                    iziToast.info({ message: 'Depósito rechazado' });
-                    renderPendingDepositsView();
-                } else {
-                    iziToast.error({ message: 'Error al rechazar' });
-                }
-            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-        };
-
-        // ----- 6. Retiros Pendientes (análogo, se omite por brevedad pero debe implementarse) -----
-        // Se implementa similar a depósitos.
-
-        // ----- 7. Abrir Sesión de Lotería -----
-        function renderOpenSessionView() {
-            const html = `
-                <h4 class="text-xl font-semibold mb-4">🎰 Abrir Sesión de Lotería</h4>
-                <select id="sessionLottery" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                    <option value="Florida">Florida</option>
-                    <option value="Georgia">Georgia</option>
-                    <option value="Nueva York">Nueva York</option>
-                </select>
-                <input type="date" id="sessionDate" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <input type="text" id="sessionTimeSlot" placeholder="Turno (Mañana, Tarde, Noche)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <button id="openSessionBtn" class="w-full bg-indigo-600 py-3 rounded-xl hover:bg-indigo-700">Abrir Sesión</button>
-            `;
-            adminViewContainer.innerHTML = html;
-            document.getElementById('openSessionBtn').addEventListener('click', async () => {
-                const lottery = document.getElementById('sessionLottery').value;
-                const date = document.getElementById('sessionDate').value;
-                const time_slot = document.getElementById('sessionTimeSlot').value.trim();
-                if (!date || !time_slot) return iziToast.warning({ message: 'Completa todos los campos' });
-                try {
-                    const res = await fetch('/api/admin/lottery-sessions', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ lottery, date, time_slot, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) {
-                        iziToast.success({ message: 'Sesión abierta exitosamente' });
-                        document.getElementById('sessionDate').value = '';
-                        document.getElementById('sessionTimeSlot').value = '';
-                    } else {
-                        iziToast.error({ message: 'Error al abrir sesión' });
-                    }
-                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-            });
-        }
-
-        // ----- 8. Publicar Números Ganadores -----
-        function renderWinningNumbersView() {
-            const html = `
-                <h4 class="text-xl font-semibold mb-4">🔢 Publicar Números Ganadores</h4>
-                <select id="winLottery" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                    <option value="Florida">Florida</option>
-                    <option value="Georgia">Georgia</option>
-                    <option value="Nueva York">Nueva York</option>
-                </select>
-                <input type="date" id="winDate" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <input type="text" id="winTimeSlot" placeholder="Turno" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <input type="text" id="winNumbers" placeholder="Números (separados por comas, ej: 12,34,56)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
-                <button id="publishWinningBtn" class="w-full bg-teal-600 py-3 rounded-xl hover:bg-teal-700">Publicar</button>
-            `;
-            adminViewContainer.innerHTML = html;
-            document.getElementById('publishWinningBtn').addEventListener('click', async () => {
-                const lottery = document.getElementById('winLottery').value;
-                const date = document.getElementById('winDate').value;
-                const time_slot = document.getElementById('winTimeSlot').value.trim();
-                const numbersStr = document.getElementById('winNumbers').value.trim();
-                if (!date || !time_slot || !numbersStr) return iziToast.warning({ message: 'Completa todos los campos' });
-                const numbers = numbersStr.split(',').map(n => n.trim()).filter(n => n);
-                try {
-                    const res = await fetch('/api/admin/winning-numbers', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ lottery, date, time_slot, numbers, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) {
-                        iziToast.success({ message: 'Números publicados' });
-                        document.getElementById('winDate').value = '';
-                        document.getElementById('winTimeSlot').value = '';
-                        document.getElementById('winNumbers').value = '';
-                    } else {
-                        iziToast.error({ message: 'Error al publicar' });
-                    }
-                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-            });
+                const res = await fetch(`/api/user/${currentUser.telegram_id}/referrals/count`);
+                const data = await res.json();
+                document.getElementById('referralCount').innerText = data.count || 0;
+                const link = `https://t.me/${botUsername}?start=${currentUser.telegram_id}`;
+                document.getElementById('referralLink').value = link;
+            } catch (e) {}
         }
 
         // ------------------------------------------------------------
-        // UTILIDADES
-        // ------------------------------------------------------------
-        window.closeModal = function() {
-            adminModal.classList.add('hidden');
-        };
-
-        // ------------------------------------------------------------
-        // NAVEGACIÓN ENTRE SECCIONES PRINCIPALES
+        // NAVEGACIÓN ENTRE SECCIONES
         // ------------------------------------------------------------
         function showSection(sectionId) {
             sections.forEach(s => {
@@ -850,7 +552,306 @@
             });
         });
 
-        // Navegación interna del admin
+        // ------------------------------------------------------------
+        // FUNCIONES ADMIN (SIMPLIFICADAS)
+        // ------------------------------------------------------------
+        function showAdminView(viewName) {
+            if (!isAdmin) return;
+            switch(viewName) {
+                case 'addDeposit': renderAddDepositView(); break;
+                case 'addWithdraw': renderAddWithdrawView(); break;
+                case 'setRate': renderSetRateView(); break;
+                case 'setPrices': renderSetPricesView(); break;
+                case 'viewData': renderViewDataView(); break;
+                case 'openSession': renderOpenSessionView(); break;
+                case 'publishWinning': renderPublishWinningView(); break;
+                default: adminViewContainer.innerHTML = '<p class="text-center text-gray-400">Selecciona una opción</p>';
+            }
+        }
+
+        // 1. Añadir método de depósito
+        function renderAddDepositView() {
+            adminViewContainer.innerHTML = `
+                <h4 class="text-xl font-semibold mb-4">➕ Añadir método de DEPÓSITO</h4>
+                <input type="text" id="depName" placeholder="Nombre (ej: Banco Metropolitano)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                <input type="text" id="depCard" placeholder="Número de tarjeta/cuenta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                <input type="text" id="depConfirm" placeholder="Número a confirmar (ej: 1234)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                <button id="saveDepositMethodBtn" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Guardar método</button>
+            `;
+            document.getElementById('saveDepositMethodBtn').addEventListener('click', async () => {
+                const name = document.getElementById('depName').value.trim();
+                const card = document.getElementById('depCard').value.trim();
+                const confirm = document.getElementById('depConfirm').value.trim();
+                if (!name || !card || !confirm) {
+                    iziToast.warning({ message: 'Todos los campos son obligatorios' });
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/admin/deposit-methods', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, card, confirm, userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) {
+                        iziToast.success({ message: 'Método de depósito añadido' });
+                        await loadDepositMethods();
+                        renderViewDataView(); // volver a vista de datos
+                    } else {
+                        iziToast.error({ message: 'Error al guardar' });
+                    }
+                } catch (e) {
+                    iziToast.error({ message: 'Error de conexión' });
+                }
+            });
+        }
+
+        // 2. Añadir método de retiro
+        function renderAddWithdrawView() {
+            adminViewContainer.innerHTML = `
+                <h4 class="text-xl font-semibold mb-4">➕ Añadir método de RETIRO</h4>
+                <input type="text" id="witName" placeholder="Nombre (ej: Transfermovil)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                <input type="text" id="witCard" placeholder="Instrucción/número" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                <input type="text" id="witConfirm" placeholder="Número a confirmar (o 'ninguno')" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                <button id="saveWithdrawMethodBtn" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Guardar método</button>
+            `;
+            document.getElementById('saveWithdrawMethodBtn').addEventListener('click', async () => {
+                const name = document.getElementById('witName').value.trim();
+                const card = document.getElementById('witCard').value.trim();
+                const confirm = document.getElementById('witConfirm').value.trim();
+                if (!name || !card) {
+                    iziToast.warning({ message: 'Nombre e instrucción son obligatorios' });
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/admin/withdraw-methods', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name, card, confirm, userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) {
+                        iziToast.success({ message: 'Método de retiro añadido' });
+                        await loadWithdrawMethods();
+                        renderViewDataView();
+                    } else {
+                        iziToast.error({ message: 'Error al guardar' });
+                    }
+                } catch (e) {
+                    iziToast.error({ message: 'Error de conexión' });
+                }
+            });
+        }
+
+        // 3. Configurar tasa de cambio
+        function renderSetRateView() {
+            adminViewContainer.innerHTML = `
+                <h4 class="text-xl font-semibold mb-4">💰 Configurar tasa USD/CUP</h4>
+                <p class="mb-2">Tasa actual: <span class="text-cyan-300 font-bold">1 USD = ${exchangeRate} CUP</span></p>
+                <input type="number" id="newRate" value="${exchangeRate}" step="0.01" min="1" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-green-500 mb-3">
+                <button id="updateRateBtn" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Actualizar tasa</button>
+            `;
+            document.getElementById('updateRateBtn').addEventListener('click', async () => {
+                const rate = parseFloat(document.getElementById('newRate').value);
+                if (isNaN(rate) || rate <= 0) {
+                    iziToast.warning({ message: 'Tasa inválida' });
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/admin/exchange-rate', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rate, userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) {
+                        exchangeRate = rate;
+                        iziToast.success({ message: 'Tasa actualizada' });
+                    } else {
+                        iziToast.error({ message: 'Error al actualizar' });
+                    }
+                } catch (e) {
+                    iziToast.error({ message: 'Error de conexión' });
+                }
+            });
+        }
+
+        // 4. Configurar precios de jugadas
+        function renderSetPricesView() {
+            let html = `<h4 class="text-xl font-semibold mb-4">🎲 Precios por jugada</h4>`;
+            playPrices.forEach(p => {
+                html += `
+                    <div class="flex items-center gap-3 mb-3 bg-gray-800/50 p-3 rounded-xl">
+                        <span class="w-24 font-bold">${p.bet_type}</span>
+                        <input type="number" id="price_cup_${p.bet_type}" value="${p.amount_cup}" placeholder="CUP" step="0.01" min="0" class="flex-1 p-2 rounded-lg bg-gray-700 text-white">
+                        <input type="number" id="price_usd_${p.bet_type}" value="${p.amount_usd}" placeholder="USD" step="0.01" min="0" class="flex-1 p-2 rounded-lg bg-gray-700 text-white">
+                        <button onclick="updatePlayPrice('${p.bet_type}')" class="bg-blue-600 px-4 py-2 rounded-lg hover:bg-blue-700">Actualizar</button>
+                    </div>
+                `;
+            });
+            adminViewContainer.innerHTML = html;
+        }
+
+        window.updatePlayPrice = async function(betType) {
+            const cup = parseFloat(document.getElementById(`price_cup_${betType}`).value);
+            const usd = parseFloat(document.getElementById(`price_usd_${betType}`).value);
+            if (isNaN(cup) || isNaN(usd) || cup < 0 || usd < 0) {
+                iziToast.warning({ message: 'Montos inválidos' });
+                return;
+            }
+            try {
+                const res = await fetch(`/api/admin/play-prices/${betType}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount_cup: cup, amount_usd: usd, userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Precio actualizado' });
+                    await loadPlayPrices();
+                } else {
+                    iziToast.error({ message: 'Error al actualizar' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        };
+
+        // 5. Ver datos actuales
+        function renderViewDataView() {
+            let text = `💰 *Tasa:* 1 USD = ${exchangeRate} CUP\n\n📥 *Métodos DEPÓSITO:*\n`;
+            depositMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
+            text += `\n📤 *Métodos RETIRO:*\n`;
+            withdrawMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
+            text += `\n🎲 *Precios por jugada:*\n`;
+            playPrices.forEach(p => text += `  • ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD\n`);
+            adminViewContainer.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-sm text-gray-200 bg-gray-800/50 p-4 rounded-xl">${text}</pre>`;
+        }
+
+        // 6. Abrir sesión de lotería
+        function renderOpenSessionView() {
+            adminViewContainer.innerHTML = `
+                <h4 class="text-xl font-semibold mb-4">🎰 Abrir sesión de lotería</h4>
+                <div class="grid grid-cols-3 gap-2 mb-4">
+                    <button data-lottery="Florida" class="session-lottery-btn bg-red-600/80 p-3 rounded-xl hover:bg-red-700">Florida</button>
+                    <button data-lottery="Georgia" class="session-lottery-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">Georgia</button>
+                    <button data-lottery="Nueva York" class="session-lottery-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">Nueva York</button>
+                </div>
+                <div id="sessionSlotSelection" class="hidden">
+                    <p class="mb-2">Selecciona turno:</p>
+                    <div class="grid grid-cols-3 gap-2">
+                        <button data-slot="morning" class="slot-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700">☀️ Mañana</button>
+                        <button data-slot="afternoon" class="slot-btn bg-orange-600/80 p-3 rounded-xl hover:bg-orange-700">🌆 Tarde</button>
+                        <button data-slot="evening" class="slot-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700">🌙 Noche</button>
+                    </div>
+                </div>
+            `;
+            let selectedLottery = '';
+            document.querySelectorAll('.session-lottery-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    selectedLottery = e.currentTarget.dataset.lottery;
+                    document.getElementById('sessionSlotSelection').classList.remove('hidden');
+                });
+            });
+            document.querySelectorAll('.slot-btn').forEach(btn => {
+                btn.addEventListener('click', async (e) => {
+                    const slot = e.currentTarget.dataset.slot;
+                    const slotNames = { morning: 'Mañana', afternoon: 'Tarde', evening: 'Noche' };
+                    const timeSlot = slotNames[slot];
+                    if (!selectedLottery || !timeSlot) return;
+                    // Calcular fecha y hora de cierre
+                    const now = new Date();
+                    const today = now.toISOString().split('T')[0];
+                    let endHour, endMinute;
+                    if (slot === 'morning') { endHour = 12; endMinute = 0; }
+                    else if (slot === 'afternoon') { endHour = 18; endMinute = 30; }
+                    else { endHour = 23; endMinute = 0; }
+                    const endTimeStr = `${today} ${endHour.toString().padStart(2,'0')}:${endMinute.toString().padStart(2,'0')}:00`;
+                    const endTime = new Date(endTimeStr + ' America/Havana').toISOString();
+                    try {
+                        const res = await fetch('/api/admin/lottery-sessions', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ 
+                                lottery: selectedLottery, 
+                                date: today, 
+                                time_slot: timeSlot, 
+                                end_time: endTime,
+                                userId: currentUser.telegram_id 
+                            })
+                        });
+                        if (res.ok) {
+                            iziToast.success({ message: `Sesión de ${selectedLottery} (${timeSlot}) abierta` });
+                            renderViewDataView();
+                        } else {
+                            iziToast.error({ message: 'Error al abrir sesión' });
+                        }
+                    } catch (e) {
+                        iziToast.error({ message: 'Error de conexión' });
+                    }
+                });
+            });
+        }
+
+        // 7. Publicar números ganadores
+        async function renderPublishWinningView() {
+            try {
+                const res = await fetch('/api/admin/lottery-sessions/closed', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                // GET no puede tener body; mejor usamos POST
+                const postRes = await fetch('/api/admin/lottery-sessions/closed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                const sessions = await postRes.json();
+                let html = `<h4 class="text-xl font-semibold mb-4">🔢 Publicar números ganadores</h4>`;
+                if (sessions.length === 0) {
+                    html += '<p class="text-gray-400">No hay sesiones cerradas.</p>';
+                } else {
+                    html += `<p class="mb-3">Selecciona una sesión:</p>`;
+                    sessions.forEach(s => {
+                        html += `
+                            <div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
+                                <div>
+                                    <span class="font-bold">${s.lottery}</span> - ${s.date} (${s.time_slot})
+                                </div>
+                                <button onclick="publishWinningForSession(${s.id}, '${s.lottery}', '${s.date}', '${s.time_slot}')" class="bg-teal-600 px-4 py-1 rounded-lg text-sm hover:bg-teal-700">
+                                    Publicar
+                                </button>
+                            </div>
+                        `;
+                    });
+                }
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones.</p>';
+            }
+        }
+
+        window.publishWinningForSession = async function(sessionId, lottery, date, timeSlot) {
+            const numbers = prompt('Ingresa los números ganadores separados por comas (ej: 12,34,56):');
+            if (!numbers) return;
+            const numbersArray = numbers.split(',').map(n => n.trim()).filter(n => n);
+            try {
+                const res = await fetch('/api/admin/winning-numbers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ lottery, date, time_slot: timeSlot, numbers: numbersArray, userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Números publicados exitosamente' });
+                    renderViewDataView();
+                } else {
+                    iziToast.error({ message: 'Error al publicar' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        };
+
+        // ------------------------------------------------------------
+        // EVENTOS DE ADMIN
+        // ------------------------------------------------------------
         adminNavBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -860,12 +861,217 @@
         });
 
         // ------------------------------------------------------------
-        // CARGAR DATOS ADICIONALES (usuario normal)
+        // EVENTOS DE USUARIO (RECARGAS, RETIROS, TRANSFERENCIAS)
         // ------------------------------------------------------------
-        async function loadBets() { /* igual que antes */ }
-        async function loadReferralStats() { /* igual que antes */ }
+        document.getElementById('rechargeBtn').addEventListener('click', () => {
+            document.getElementById('rechargeSection').classList.toggle('hidden');
+            document.getElementById('withdrawSection').classList.add('hidden');
+            document.getElementById('transferSection').classList.add('hidden');
+        });
 
-        // Iniciar
+        document.getElementById('depositMethodSelect').addEventListener('change', async (e) => {
+            const methodId = e.target.value;
+            if (!methodId) {
+                document.getElementById('methodDetails').classList.add('hidden');
+                document.getElementById('submitDepositBtn').disabled = true;
+                return;
+            }
+            try {
+                const res = await fetch(`/api/deposit-methods/${methodId}`);
+                const method = await res.json();
+                document.getElementById('methodCard').innerText = method.card;
+                document.getElementById('methodConfirm').innerText = method.confirm;
+                document.getElementById('methodDetails').classList.remove('hidden');
+                document.getElementById('submitDepositBtn').disabled = false;
+            } catch (e) {}
+        });
+
+        document.getElementById('submitDepositBtn').addEventListener('click', async () => {
+            const methodId = document.getElementById('depositMethodSelect').value;
+            const amountText = document.getElementById('depositAmount').value.trim();
+            if (!methodId || !amountText) {
+                iziToast.warning({ message: 'Selecciona método y escribe el monto' });
+                return;
+            }
+            // Enviar monto al backend como depósito (simulado)
+            try {
+                const res = await fetch('/api/deposit-requests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        methodId, 
+                        userId: currentUser.telegram_id,
+                        amount: amountText 
+                    })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Solicitud de recarga enviada' });
+                    // Simulación: actualizar saldo local
+                    currentUser.usd += 10; // ejemplo
+                    updateBalanceUI();
+                    document.getElementById('rechargeSection').classList.add('hidden');
+                } else {
+                    iziToast.error({ message: 'Error al enviar solicitud' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        });
+
+        document.getElementById('withdrawBtn').addEventListener('click', () => {
+            document.getElementById('withdrawSection').classList.toggle('hidden');
+            document.getElementById('rechargeSection').classList.add('hidden');
+            document.getElementById('transferSection').classList.add('hidden');
+        });
+
+        document.getElementById('submitWithdrawBtn').addEventListener('click', async () => {
+            const methodId = document.getElementById('withdrawMethodSelect').value;
+            const account = document.getElementById('withdrawAccount').value.trim();
+            if (!methodId || !account) {
+                iziToast.warning({ message: 'Selecciona método y escribe la cuenta' });
+                return;
+            }
+            const amount = parseFloat(currentUser.usd);
+            if (amount < 1) {
+                iziToast.error({ message: 'Saldo insuficiente (mínimo 1 USD)' });
+                return;
+            }
+            try {
+                const res = await fetch('/api/withdraw-requests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        methodId, 
+                        amount, 
+                        account, 
+                        userId: currentUser.telegram_id 
+                    })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Solicitud de retiro enviada' });
+                    currentUser.usd -= amount;
+                    updateBalanceUI();
+                    document.getElementById('withdrawSection').classList.add('hidden');
+                    document.getElementById('withdrawAccount').value = '';
+                } else {
+                    iziToast.error({ message: 'Error al solicitar retiro' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        });
+
+        document.getElementById('transferBtn').addEventListener('click', () => {
+            document.getElementById('transferSection').classList.toggle('hidden');
+            document.getElementById('rechargeSection').classList.add('hidden');
+            document.getElementById('withdrawSection').classList.add('hidden');
+        });
+
+        document.getElementById('submitTransferBtn').addEventListener('click', async () => {
+            const targetId = parseInt(document.getElementById('transferTarget').value);
+            const amount = parseFloat(document.getElementById('transferAmount').value);
+            if (!targetId || !amount || amount <= 0) {
+                iziToast.warning({ message: 'ID y monto válidos requeridos' });
+                return;
+            }
+            if (amount > parseFloat(currentUser.usd)) {
+                iziToast.error({ message: 'Saldo insuficiente' });
+                return;
+            }
+            try {
+                const res = await fetch('/api/transfer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        from: currentUser.telegram_id, 
+                        to: targetId, 
+                        amount 
+                    })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: `Transferencia de ${amount} USD a ${targetId} exitosa` });
+                    currentUser.usd -= amount;
+                    updateBalanceUI();
+                    document.getElementById('transferSection').classList.add('hidden');
+                    document.getElementById('transferTarget').value = '';
+                    document.getElementById('transferAmount').value = '';
+                } else {
+                    iziToast.error({ message: 'Error en la transferencia' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        });
+
+        // ------------------------------------------------------------
+        // EVENTOS DE JUEGO
+        // ------------------------------------------------------------
+        document.querySelectorAll('.lottery-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const lottery = btn.dataset.lottery;
+                document.getElementById('betTypeContainer').classList.remove('hidden');
+                document.getElementById('betTypeContainer').dataset.lottery = lottery;
+            });
+        });
+
+        document.querySelectorAll('.type-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const type = btn.dataset.type;
+                const lottery = document.getElementById('betTypeContainer').dataset.lottery || 'Florida';
+                document.getElementById('betFormContainer').classList.remove('hidden');
+                document.getElementById('betFormContainer').dataset.type = type;
+                document.getElementById('betFormContainer').dataset.lottery = lottery;
+            });
+        });
+
+        document.getElementById('submitBetBtn').addEventListener('click', async () => {
+            const rawText = document.getElementById('betInput').value.trim();
+            const betType = document.getElementById('betFormContainer').dataset.type;
+            const lottery = document.getElementById('betFormContainer').dataset.lottery;
+            if (!rawText || !betType) {
+                iziToast.warning({ title: 'Falta información', message: 'Escribe los números de tu jugada' });
+                return;
+            }
+            try {
+                const res = await fetch('/api/bets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: currentUser.telegram_id,
+                        lottery,
+                        betType,
+                        rawText
+                    })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    iziToast.success({ title: '✅ Jugada registrada', message: '¡Buena suerte!' });
+                    currentUser = data.updatedUser;
+                    updateBalanceUI();
+                    loadBets();
+                    document.getElementById('betInput').value = '';
+                    showSection('home');
+                } else {
+                    iziToast.error({ title: 'Error', message: data.error || 'No se pudo registrar' });
+                }
+            } catch (e) {
+                iziToast.error({ title: 'Error', message: 'Error de conexión' });
+            }
+        });
+
+        // ------------------------------------------------------------
+        // REFERIDOS: COPIAR ENLACE
+        // ------------------------------------------------------------
+        document.getElementById('copyLinkBtn').addEventListener('click', () => {
+            const link = document.getElementById('referralLink');
+            link.select();
+            document.execCommand('copy');
+            iziToast.success({ title: 'Copiado', message: 'Enlace copiado al portapapeles' });
+        });
+
+        // ------------------------------------------------------------
+        // INICIAR
+        // ------------------------------------------------------------
         initAuth();
     </script>
 </body>
