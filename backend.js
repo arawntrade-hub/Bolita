@@ -1,6 +1,7 @@
 // ==============================
 // backend.js - API REST + Bot de Telegram (UNIFICADO)
-// Versión FINAL con soporte para D/T, broadcasts y gestión completa
+// Versión con soporte para múltiples admins, horarios por región,
+// configuración global de precios con mínimos, y validación en apuestas.
 // ==============================
 
 require('dotenv').config();
@@ -19,7 +20,7 @@ const bot = require('./bot');
 // ========== CONFIGURACIÓN DESDE .ENV ==========
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = parseInt(process.env.ADMIN_ID);
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [];
 const ADMIN_CHANNEL = process.env.ADMIN_CHANNEL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
@@ -44,6 +45,10 @@ const upload = multer({
 });
 
 // ========== FUNCIONES AUXILIARES ==========
+
+function isAdmin(userId) {
+    return ADMIN_IDS.includes(parseInt(userId));
+}
 
 function verifyTelegramWebAppData(initData, botToken) {
     const encoded = decodeURIComponent(initData);
@@ -84,18 +89,36 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
+// Obtener configuración de mínimos de depósito/retiro
+async function getMinDepositUSD() {
+    const { data } = await supabase
+        .from('app_config')
+        .select('value')
+        .eq('key', 'min_deposit_usd')
+        .single();
+    return data ? parseFloat(data.value) : 1.0;
+}
+
+async function getMinWithdrawUSD() {
+    const { data } = await supabase
+        .from('app_config')
+        .select('value')
+        .eq('key', 'min_withdraw_usd')
+        .single();
+    return data ? parseFloat(data.value) : 1.0;
+}
+
 // ========== PARSEO DE APUESTAS CON SOPORTE PARA D Y T ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return null;
 
-    let numero, montoStr, moneda = 'usd';
     const match = line.match(/^([\dx]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/);
     if (!match) return null;
 
-    numero = match[1].trim();
-    montoStr = match[2];
-    if (match[3]) moneda = match[3];
+    let numero = match[1].trim();
+    const montoStr = match[2];
+    const moneda = match[3] || 'usd';
 
     const montoBase = parseFloat(montoStr);
     if (isNaN(montoBase) || montoBase <= 0) return null;
@@ -155,7 +178,7 @@ function parseBetMessage(text, betType) {
 }
 
 function getEndTimeFromSlot(timeSlot) {
-    const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
+    const now = moment.tz(TIMEZONE);
     let hour, minute;
     if (timeSlot === 'Día') {
         hour = 12;
@@ -164,7 +187,11 @@ function getEndTimeFromSlot(timeSlot) {
         hour = 23;
         minute = 0;
     }
-    return moment.tz(`${today} ${hour}:${minute}:00`, TIMEZONE).toDate();
+    const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
+    if (now.isSameOrAfter(endTime)) {
+        return null;
+    }
+    return endTime.toDate();
 }
 
 // ========== FUNCIÓN DE BROADCAST GLOBAL ==========
@@ -176,7 +203,7 @@ async function broadcastToAllUsers(message, parseMode = 'HTML') {
     for (const u of users || []) {
         try {
             await bot.telegram.sendMessage(u.telegram_id, message, { parse_mode: parseMode });
-            await new Promise(resolve => setTimeout(resolve, 30)); // evitar flood
+            await new Promise(resolve => setTimeout(resolve, 30));
         } catch (e) {
             console.warn(`Error enviando broadcast a ${u.telegram_id}:`, e.message);
         }
@@ -189,8 +216,7 @@ async function requireAdmin(req, res, next) {
     if (!userId) {
         return res.status(403).json({ error: 'No autorizado: falta userId' });
     }
-    userId = parseInt(userId);
-    if (userId !== ADMIN_ID) {
+    if (!isAdmin(userId)) {
         return res.status(403).json({ error: 'No autorizado: no eres admin' });
     }
     next();
@@ -220,7 +246,7 @@ app.post('/api/auth', async (req, res) => {
 
     res.json({
         user,
-        isAdmin: tgUser.id === ADMIN_ID,
+        isAdmin: isAdmin(tgUser.id),
         exchangeRate,
         botUsername: botInfo.username
     });
@@ -246,7 +272,7 @@ app.get('/api/withdraw-methods/:id', async (req, res) => {
     res.json(data);
 });
 
-// --- Precios de jugadas ---
+// --- Precios de jugadas (globales) ---
 app.get('/api/play-prices', async (req, res) => {
     const { data } = await supabase.from('play_prices').select('*');
     res.json(data || []);
@@ -268,10 +294,10 @@ app.get('/api/winning-numbers', async (req, res) => {
     res.json(data || []);
 });
 
-// --- Sesión activa para una lotería (usado en WebApp) ---
+// --- Sesión activa para una lotería y turno específico ---
 app.get('/api/lottery-sessions/active', async (req, res) => {
-    const { lottery, date } = req.query;
-    if (!lottery || !date) {
+    const { lottery, date, time_slot } = req.query;
+    if (!lottery || !date || !time_slot) {
         return res.status(400).json({ error: 'Faltan parámetros' });
     }
     const { data } = await supabase
@@ -279,6 +305,7 @@ app.get('/api/lottery-sessions/active', async (req, res) => {
         .select('*')
         .eq('lottery', lottery)
         .eq('date', date)
+        .eq('time_slot', time_slot)
         .eq('status', 'open')
         .maybeSingle();
     res.json(data);
@@ -324,22 +351,23 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         return res.status(500).json({ error: 'Error al guardar solicitud' });
     }
 
-    try {
-        const method = await supabase.from('deposit_methods').select('name').eq('id', methodId).single();
-        const methodName = method.data?.name || 'Desconocido';
-        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            chat_id: ADMIN_CHANNEL,
-            text: `📥 <b>Nueva solicitud de DEPÓSITO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n🏦 Método: ${methodName}\n💰 Monto: ${amount}\n📎 <a href="${publicUrl}">Ver captura</a>\n🆔 Solicitud: ${request.id}`,
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [[
-                    { text: '✅ Aprobar', callback_data: `approve_deposit_${request.id}` },
-                    { text: '❌ Rechazar', callback_data: `reject_deposit_${request.id}` }
-                ]]
-            }
-        });
-    } catch (e) {
-        console.error('Error enviando notificación de depósito:', e);
+    // Notificar a todos los admins
+    for (const adminId of ADMIN_IDS) {
+        try {
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: adminId,
+                text: `📥 <b>Nueva solicitud de DEPÓSITO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n🏦 Método: ${methodName}\n💰 Monto: ${amount}\n📎 <a href="${publicUrl}">Ver captura</a>\n🆔 Solicitud: ${request.id}`,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ Aprobar', callback_data: `approve_deposit_${request.id}` },
+                        { text: '❌ Rechazar', callback_data: `reject_deposit_${request.id}` }
+                    ]]
+                }
+            });
+        } catch (e) {
+            console.error('Error enviando notificación de depósito:', e);
+        }
     }
 
     res.json({ success: true, requestId: request.id });
@@ -378,22 +406,20 @@ app.post('/api/withdraw-requests', async (req, res) => {
         .update({ usd: parseFloat(user.usd) - amount, updated_at: new Date() })
         .eq('telegram_id', userId);
 
-    try {
-        const method = await supabase.from('withdraw_methods').select('name').eq('id', methodId).single();
-        const methodName = method.data?.name || 'Desconocido';
-        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            chat_id: ADMIN_CHANNEL,
-            text: `📤 <b>Nueva solicitud de RETIRO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n💰 Monto: ${amount} USD\n🏦 Método: ${methodName}\n📞 Cuenta: ${account}\n🆔 Solicitud: ${request.id}`,
-            parse_mode: 'HTML',
-            reply_markup: {
-                inline_keyboard: [[
-                    { text: '✅ Aprobar', callback_data: `approve_withdraw_${request.id}` },
-                    { text: '❌ Rechazar', callback_data: `reject_withdraw_${request.id}` }
-                ]]
-            }
-        });
-    } catch (e) {
-        console.error('Error enviando notificación de retiro:', e);
+    for (const adminId of ADMIN_IDS) {
+        try {
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: adminId,
+                text: `📤 <b>Nueva solicitud de RETIRO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n💰 Monto: ${amount} USD\n🏦 Método: ${methodName}\n📞 Cuenta: ${account}\n🆔 Solicitud: ${request.id}`,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ Aprobar', callback_data: `approve_withdraw_${request.id}` },
+                        { text: '❌ Rechazar', callback_data: `reject_withdraw_${request.id}` }
+                    ]]
+                }
+            });
+        } catch (e) {}
     }
 
     res.json({ success: true, requestId: request.id });
@@ -460,6 +486,25 @@ app.post('/api/bets', async (req, res) => {
     const totalCUP = parsed.totalCUP;
     if (totalUSD === 0 && totalCUP === 0) {
         return res.status(400).json({ error: 'Debes especificar un monto válido (USD o CUP)' });
+    }
+
+    // Obtener mínimos para este tipo de jugada
+    const { data: priceData } = await supabase
+        .from('play_prices')
+        .select('min_cup, min_usd')
+        .eq('bet_type', betType)
+        .single();
+
+    const minCup = priceData?.min_cup || 0;
+    const minUsd = priceData?.min_usd || 0;
+
+    for (const item of parsed.items) {
+        if (item.cup > 0 && item.cup < minCup) {
+            return res.status(400).json({ error: `El monto mínimo para jugadas en CUP es ${minCup} CUP` });
+        }
+        if (item.usd > 0 && item.usd < minUsd) {
+            return res.status(400).json({ error: `El monto mínimo para jugadas en USD es ${minUsd} USD` });
+        }
     }
 
     let newUsd = parseFloat(user.usd);
@@ -586,26 +631,54 @@ app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
     res.json({ success: true, rate });
 });
 
-// --- Actualizar precios y multiplicadores de una jugada ---
+// --- Actualizar precios y multiplicadores de una jugada (global) ---
 app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     const { betType } = req.params;
-    const { amount_cup, amount_usd, payout_multiplier } = req.body;
+    const { amount_cup, amount_usd, payout_multiplier, min_cup, min_usd } = req.body;
     if (amount_cup === undefined || amount_usd === undefined || payout_multiplier === undefined) {
         return res.status(400).json({ error: 'Faltan campos (amount_cup, amount_usd, payout_multiplier)' });
     }
     if (amount_cup < 0 || amount_usd < 0 || payout_multiplier < 0) {
         return res.status(400).json({ error: 'Los valores no pueden ser negativos' });
     }
+    const updateData = {
+        amount_cup,
+        amount_usd,
+        payout_multiplier,
+        updated_at: new Date()
+    };
+    if (min_cup !== undefined) updateData.min_cup = min_cup;
+    if (min_usd !== undefined) updateData.min_usd = min_usd;
+
     const { error } = await supabase
         .from('play_prices')
-        .update({
-            amount_cup,
-            amount_usd,
-            payout_multiplier,
-            updated_at: new Date()
-        })
+        .update(updateData)
         .eq('bet_type', betType);
     if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
+// --- Configurar mínimo depósito ---
+app.post('/api/admin/min-deposit', requireAdmin, async (req, res) => {
+    const { value } = req.body;
+    if (!value || value <= 0) {
+        return res.status(400).json({ error: 'Valor inválido' });
+    }
+    await supabase
+        .from('app_config')
+        .upsert({ key: 'min_deposit_usd', value: value.toString() }, { onConflict: 'key' });
+    res.json({ success: true });
+});
+
+// --- Configurar mínimo retiro ---
+app.post('/api/admin/min-withdraw', requireAdmin, async (req, res) => {
+    const { value } = req.body;
+    if (!value || value <= 0) {
+        return res.status(400).json({ error: 'Valor inválido' });
+    }
+    await supabase
+        .from('app_config')
+        .upsert({ key: 'min_withdraw_usd', value: value.toString() }, { onConflict: 'key' });
     res.json({ success: true });
 });
 
@@ -634,6 +707,9 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
 
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     const endTime = getEndTimeFromSlot(time_slot);
+    if (!endTime) {
+        return res.status(400).json({ error: `La hora de cierre para el turno ${time_slot} ya pasó hoy. No se puede abrir.` });
+    }
 
     const { data: existing } = await supabase
         .from('lottery_sessions')
@@ -661,7 +737,6 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
-    // Broadcast global
     await broadcastToAllUsers(
         `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
         `✨ La región <b>${lottery}</b> acaba de abrir su turno de <b>${time_slot}</b>.\n` +
@@ -693,7 +768,6 @@ app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) =>
     if (error) return res.status(500).json({ error: error.message });
 
     if (status === 'closed') {
-        // Broadcast de cierre
         await broadcastToAllUsers(
             `🔴 <b>SESIÓN CERRADA</b>\n\n` +
             `🎰 <b>${data.lottery}</b> - Turno <b>${data.time_slot}</b>\n` +
@@ -983,7 +1057,6 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         }
     }
 
-    // Broadcast global
     await broadcastToAllUsers(
         `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
         `🎰 <b>${session.lottery}</b> - Turno <b>${session.time_slot}</b>\n` +
