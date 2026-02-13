@@ -80,6 +80,16 @@
             padding: 20px;
             border: 1px solid #00ffff;
         }
+        .status-active {
+            color: #10b981;
+            font-weight: bold;
+        }
+        .status-inactive {
+            color: #6b7280;
+        }
+        .status-closed {
+            color: #ef4444;
+        }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -180,23 +190,28 @@
                             </button>
                             <button data-lottery="Nueva York" class="lottery-btn bg-gradient-to-br from-blue-700 to-indigo-800 p-4 rounded-2xl shadow-lg hover:scale-105 transition">
                                 <i class="fas fa-city text-3xl mb-2"></i>
-                                <span class="block font-bold">New York</span>
+                                <span class="block font-bold">Nueva York</span>
                             </button>
                         </div>
                         
+                        <!-- Estado de la sesión -->
+                        <div id="sessionStatus" class="text-sm mb-3 hidden"></div>
+
                         <div id="betTypeContainer" class="hidden">
                             <h4 class="text-xl font-semibold mb-3">Tipo de jugada</h4>
                             <div class="grid grid-cols-2 gap-3 mb-4">
-                                <button data-type="fijo" class="type-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">🎯 Fijo</button>
-                                <button data-type="corridos" class="type-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">🏃 Corridos</button>
-                                <button data-type="centena" class="type-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700">💯 Centena</button>
-                                <button data-type="parle" class="type-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700">🔒 Parle</button>
+                                <button data-type="fijo" class="type-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">🎯 Fijo (2 dígitos)</button>
+                                <button data-type="corridos" class="type-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">🏃 Corridos (2 dígitos)</button>
+                                <button data-type="centena" class="type-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700">💯 Centena (3 dígitos)</button>
+                                <button data-type="parle" class="type-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700">🔒 Parle (2x2 dígitos)</button>
                             </div>
                         </div>
 
                         <div id="betFormContainer" class="hidden">
-                            <label class="block mb-2 font-medium">✍️ Escribe tus números (ej: 12 con 1 usd):</label>
-                            <textarea id="betInput" rows="3" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 focus:ring-2 focus:ring-cyan-400"></textarea>
+                            <div id="betInstructions" class="text-sm bg-gray-800/70 p-3 rounded-xl mb-3"></div>
+                            <label class="block mb-2 font-medium">✍️ Escribe tus jugadas (una por línea):</label>
+                            <textarea id="betInput" rows="4" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 focus:ring-2 focus:ring-cyan-400"></textarea>
+                            <div id="betPreview" class="mt-2 text-xs text-gray-300"></div>
                             <button id="submitBetBtn" class="mt-4 w-full bg-gradient-to-r from-cyan-500 to-blue-600 py-3 rounded-xl font-bold text-lg shadow-lg btn-glow">
                                 <i class="fas fa-check-circle mr-2"></i>Registrar apuesta
                             </button>
@@ -316,6 +331,12 @@
                         <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-crown text-yellow-400 mr-2"></i>Panel Admin</h3>
                         
                         <div class="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
+                            <button data-admin-view="sessions" class="admin-nav-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700">
+                                <i class="fas fa-calendar-alt mr-1"></i> Sesiones
+                            </button>
+                            <button data-admin-view="publishWinning" class="admin-nav-btn bg-teal-600/80 p-3 rounded-xl hover:bg-teal-700">
+                                <i class="fas fa-trophy mr-1"></i> Publicar Ganadores
+                            </button>
                             <button data-admin-view="addDeposit" class="admin-nav-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">
                                 <i class="fas fa-plus mr-1"></i> Añadir Depósito
                             </button>
@@ -326,16 +347,10 @@
                                 <i class="fas fa-dollar-sign mr-1"></i> Tasa de Cambio
                             </button>
                             <button data-admin-view="setPrices" class="admin-nav-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700">
-                                <i class="fas fa-dice mr-1"></i> Precios Jugadas
+                                <i class="fas fa-dice mr-1"></i> Precios y Pagos
                             </button>
                             <button data-admin-view="viewData" class="admin-nav-btn bg-gray-600/80 p-3 rounded-xl hover:bg-gray-700">
                                 <i class="fas fa-eye mr-1"></i> Ver Datos
-                            </button>
-                            <button data-admin-view="openSession" class="admin-nav-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700">
-                                <i class="fas fa-calendar-plus mr-1"></i> Abrir Sesión
-                            </button>
-                            <button data-admin-view="publishWinning" class="admin-nav-btn bg-teal-600/80 p-3 rounded-xl hover:bg-teal-700">
-                                <i class="fas fa-trophy mr-1"></i> Números Ganadores
                             </button>
                         </div>
 
@@ -551,23 +566,310 @@
         });
 
         // ------------------------------------------------------------
-        // FUNCIONES ADMIN
+        // FUNCIONES DE APUESTAS (WEBAPP)
+        // ------------------------------------------------------------
+        let selectedLottery = null;
+        let selectedBetType = null;
+        let activeSession = null;
+
+        // Verificar sesión activa al seleccionar lotería
+        document.querySelectorAll('.lottery-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                selectedLottery = btn.dataset.lottery;
+                const today = new Date().toISOString().split('T')[0];
+                try {
+                    const res = await fetch(`/api/lottery-sessions/active?lottery=${encodeURIComponent(selectedLottery)}&date=${today}`);
+                    const session = await res.json();
+                    if (session && session.id) {
+                        activeSession = session;
+                        document.getElementById('sessionStatus').innerHTML = `<span class="text-green-400">✅ Sesión activa: ${session.time_slot} - Cierre: ${new Date(session.end_time).toLocaleTimeString()}</span>`;
+                        document.getElementById('sessionStatus').classList.remove('hidden');
+                        document.getElementById('betTypeContainer').classList.remove('hidden');
+                        document.getElementById('betTypeContainer').dataset.lottery = selectedLottery;
+                    } else {
+                        activeSession = null;
+                        document.getElementById('sessionStatus').innerHTML = `<span class="text-red-400">❌ No hay sesión abierta para ${selectedLottery} hoy</span>`;
+                        document.getElementById('sessionStatus').classList.remove('hidden');
+                        document.getElementById('betTypeContainer').classList.add('hidden');
+                        document.getElementById('betFormContainer').classList.add('hidden');
+                    }
+                } catch (e) {
+                    iziToast.error({ message: 'Error al verificar sesión' });
+                }
+            });
+        });
+
+        // Selección de tipo de jugada
+        document.querySelectorAll('.type-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                selectedBetType = btn.dataset.type;
+                if (!activeSession) {
+                    iziToast.warning({ message: 'No hay sesión activa para esta lotería' });
+                    return;
+                }
+                document.getElementById('betFormContainer').classList.remove('hidden');
+                document.getElementById('betFormContainer').dataset.type = selectedBetType;
+                document.getElementById('betFormContainer').dataset.lottery = selectedLottery;
+
+                let instructions = '';
+                switch (selectedBetType) {
+                    case 'fijo':
+                        instructions = `🎯 <b>FIJO</b> - Número de 2 dígitos. Escribe una línea por cada jugada.\nEjemplos:\n12 con 1 usd\n34*2 usd\n89 con 5 cup\nTambién D2 (decena) o T5 (terminal).`;
+                        break;
+                    case 'corridos':
+                        instructions = `🏃 <b>CORRIDOS</b> - Número de 2 dígitos. Escribe una línea por cada jugada.\nEjemplos:\n17 con 1 usd\n32*0.5 usd\n62 con 10 cup`;
+                        break;
+                    case 'centena':
+                        instructions = `💯 <b>CENTENA</b> - Número de 3 dígitos. Escribe una línea por cada jugada.\nEjemplos:\n517 con 2 usd\n019*1 usd\n123 con 5 cup`;
+                        break;
+                    case 'parle':
+                        instructions = `🔒 <b>PARLE</b> - Combinación de dos números de 2 dígitos separados por "x". Escribe una línea por cada jugada.\nEjemplos:\n17x32 con 1 usd\n17x62*2 usd\n32x62 con 5 cup`;
+                        break;
+                }
+                document.getElementById('betInstructions').innerHTML = instructions;
+            });
+        });
+
+        // Preview de apuesta
+        document.getElementById('betInput').addEventListener('input', function() {
+            const lines = this.value.trim().split('\n').filter(l => l.trim() !== '');
+            let totalUSD = 0, totalCUP = 0;
+            lines.forEach(line => {
+                const { usd, cup } = parseAmountFromLine(line);
+                totalUSD += usd;
+                totalCUP += cup;
+            });
+            document.getElementById('betPreview').innerHTML = `💰 Total: ${totalUSD.toFixed(2)} USD / ${totalCUP.toFixed(2)} CUP`;
+        });
+
+        // Enviar apuesta
+        document.getElementById('submitBetBtn').addEventListener('click', async () => {
+            if (!activeSession) {
+                iziToast.error({ message: 'No hay sesión activa' });
+                return;
+            }
+            const rawText = document.getElementById('betInput').value.trim();
+            const betType = selectedBetType;
+            const lottery = selectedLottery;
+            if (!rawText || !betType) {
+                iziToast.warning({ title: 'Falta información', message: 'Escribe tus jugadas' });
+                return;
+            }
+            try {
+                const res = await fetch('/api/bets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: currentUser.telegram_id,
+                        lottery,
+                        betType,
+                        rawText,
+                        sessionId: activeSession.id
+                    })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    iziToast.success({ title: '✅ Jugada registrada', message: '¡Buena suerte!' });
+                    currentUser = data.updatedUser;
+                    updateBalanceUI();
+                    loadBets();
+                    document.getElementById('betInput').value = '';
+                    document.getElementById('betPreview').innerHTML = '';
+                    showSection('home');
+                } else {
+                    iziToast.error({ title: 'Error', message: data.error || 'No se pudo registrar' });
+                }
+            } catch (e) {
+                iziToast.error({ title: 'Error', message: 'Error de conexión' });
+            }
+        });
+
+        // ------------------------------------------------------------
+        // FUNCIONES ADMIN (TODAS LAS VISTAS)
         // ------------------------------------------------------------
         function showAdminView(viewName) {
             if (!isAdmin) return;
             switch(viewName) {
+                case 'sessions': renderSessionsView(); break;
+                case 'publishWinning': renderPublishWinningView(); break;
                 case 'addDeposit': renderAddDepositView(); break;
                 case 'addWithdraw': renderAddWithdrawView(); break;
                 case 'setRate': renderSetRateView(); break;
                 case 'setPrices': renderSetPricesView(); break;
                 case 'viewData': renderViewDataView(); break;
-                case 'openSession': renderOpenSessionView(); break;
-                case 'publishWinning': renderPublishWinningView(); break;
                 default: adminViewContainer.innerHTML = '<p class="text-center text-gray-400">Selecciona una opción</p>';
             }
         }
 
-        // 1. Añadir método de depósito
+        // ========== VISTA DE SESIONES ==========
+        async function renderSessionsView() {
+            try {
+                const today = new Date().toISOString().split('T')[0];
+                const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+                const res = await fetch(`/api/admin/lottery-sessions?dates=${today},${tomorrow}`);
+                const sessions = await res.json();
+
+                const loterias = ['Florida', 'Georgia', 'Nueva York'];
+                const turnos = ['Mañana', 'Tarde', 'Noche'];
+
+                let html = `<h4 class="text-xl font-semibold mb-4">🎰 Gestión de Sesiones</h4>`;
+                html += `<p class="mb-3 text-sm text-gray-300">Selecciona un turno para abrir/cerrar:</p>`;
+
+                for (const lot of loterias) {
+                    html += `<div class="mb-4 bg-gray-800/30 p-3 rounded-xl">`;
+                    html += `<h5 class="font-bold text-lg mb-2">${lot}</h5>`;
+                    html += `<div class="grid grid-cols-3 gap-2">`;
+                    
+                    for (const turno of turnos) {
+                        const session = sessions.find(s => s.lottery === lot && s.time_slot === turno && s.date === today);
+                        let estado, clase, accion;
+                        if (session) {
+                            if (session.status === 'open') {
+                                estado = '✅ ACTIVA';
+                                clase = 'status-active';
+                                accion = 'Cerrar';
+                            } else {
+                                estado = '🔴 CERRADA';
+                                clase = 'status-closed';
+                                accion = 'Abrir';
+                            }
+                        } else {
+                            estado = '⚪ INACTIVA';
+                            clase = 'status-inactive';
+                            accion = 'Abrir';
+                        }
+
+                        html += `<div class="bg-gray-700/50 p-2 rounded-lg text-center">
+                                    <span class="block text-sm">${turno}</span>
+                                    <span class="${clase} text-xs">${estado}</span>
+                                    <button onclick="toggleSession('${lot}', '${turno}', ${session ? session.id : 'null'}, '${session ? session.status : 'closed'}')" 
+                                            class="mt-2 bg-${session && session.status === 'open' ? 'red' : 'green'}-600 px-3 py-1 rounded-lg text-xs w-full">
+                                        ${accion}
+                                    </button>
+                                </div>`;
+                    }
+                    html += `</div></div>`;
+                }
+                html += `<button onclick="renderSessionsView()" class="mt-2 bg-blue-600 px-4 py-2 rounded-xl text-sm">🔄 Actualizar</button>`;
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones.</p>';
+            }
+        }
+
+        window.toggleSession = async function(lottery, timeSlot, sessionId, currentStatus) {
+            if (sessionId) {
+                const newStatus = currentStatus === 'open' ? 'closed' : 'open';
+                try {
+                    const res = await fetch('/api/admin/lottery-sessions/toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ sessionId, status: newStatus, userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) {
+                        iziToast.success({ message: `Sesión ${newStatus === 'open' ? 'abierta' : 'cerrada'}` });
+                        renderSessionsView();
+                    } else {
+                        iziToast.error({ message: 'Error al cambiar estado' });
+                    }
+                } catch (e) {
+                    iziToast.error({ message: 'Error de conexión' });
+                }
+            } else {
+                try {
+                    const today = new Date().toISOString().split('T')[0];
+                    let endHour, endMinute;
+                    if (timeSlot === 'Mañana') { endHour = 12; endMinute = 0; }
+                    else if (timeSlot === 'Tarde') { endHour = 18; endMinute = 30; }
+                    else { endHour = 23; endMinute = 0; }
+                    const endTimeStr = `${today} ${endHour.toString().padStart(2,'0')}:${endMinute.toString().padStart(2,'0')}:00`;
+                    const endTime = new Date(endTimeStr + ' America/Havana').toISOString();
+
+                    const res = await fetch('/api/admin/lottery-sessions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            lottery,
+                            date: today,
+                            time_slot: timeSlot,
+                            end_time: endTime,
+                            userId: currentUser.telegram_id
+                        })
+                    });
+                    if (res.ok) {
+                        iziToast.success({ message: `Sesión de ${lottery} (${timeSlot}) abierta` });
+                        renderSessionsView();
+                    } else {
+                        const err = await res.json();
+                        iziToast.error({ message: err.error || 'Error al abrir sesión' });
+                    }
+                } catch (e) {
+                    iziToast.error({ message: 'Error de conexión' });
+                }
+            }
+        };
+
+        // ========== PUBLICAR GANADORES (7 DÍGITOS) ==========
+        async function renderPublishWinningView() {
+            try {
+                const res = await fetch('/api/admin/lottery-sessions/closed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                const sessions = await res.json();
+                let html = `<h4 class="text-xl font-semibold mb-4">🔢 Publicar números ganadores</h4>`;
+                html += `<p class="mb-2 text-sm text-yellow-300">⚠️ El número debe tener 7 dígitos (ej: 5173262 o 517 3262).</p>`;
+                if (sessions.length === 0) {
+                    html += '<p class="text-gray-400">No hay sesiones cerradas sin publicar.</p>';
+                } else {
+                    html += `<p class="mb-3">Selecciona una sesión:</p>`;
+                    sessions.forEach(s => {
+                        html += `
+                            <div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
+                                <div>
+                                    <span class="font-bold">${s.lottery}</span> - ${s.date} (${s.time_slot})
+                                </div>
+                                <button onclick="publishWinning(${s.id})" class="bg-teal-600 px-4 py-1 rounded-lg text-sm hover:bg-teal-700">
+                                    Publicar
+                                </button>
+                            </div>
+                        `;
+                    });
+                }
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones.</p>';
+            }
+        }
+
+        window.publishWinning = async function(sessionId) {
+            const number = prompt('Ingresa el número ganador de 7 DÍGITOS (centena + cuarteta, ej: 5173262 o 517 3262):');
+            if (!number) return;
+            const clean = number.replace(/\s+/g, '');
+            if (!/^\d{7}$/.test(clean)) {
+                iziToast.error({ message: 'Debe tener exactamente 7 dígitos' });
+                return;
+            }
+            try {
+                const res = await fetch('/api/admin/winning-numbers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sessionId, winningNumber: clean, userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Números publicados y premios calculados' });
+                    renderPublishWinningView();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al publicar' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        };
+
+        // ========== AÑADIR MÉTODO DEPÓSITO ==========
         function renderAddDepositView() {
             adminViewContainer.innerHTML = `
                 <h4 class="text-xl font-semibold mb-4">➕ Añadir método de DEPÓSITO</h4>
@@ -603,7 +905,7 @@
             });
         }
 
-        // 2. Añadir método de retiro
+        // ========== AÑADIR MÉTODO RETIRO ==========
         function renderAddWithdrawView() {
             adminViewContainer.innerHTML = `
                 <h4 class="text-xl font-semibold mb-4">➕ Añadir método de RETIRO</h4>
@@ -639,7 +941,7 @@
             });
         }
 
-        // 3. Configurar tasa de cambio
+        // ========== CONFIGURAR TASA DE CAMBIO ==========
         function renderSetRateView() {
             adminViewContainer.innerHTML = `
                 <h4 class="text-xl font-semibold mb-4">💰 Configurar tasa USD/CUP</h4>
@@ -662,6 +964,7 @@
                     if (res.ok) {
                         exchangeRate = rate;
                         iziToast.success({ message: 'Tasa actualizada' });
+                        renderViewDataView();
                     } else {
                         iziToast.error({ message: 'Error al actualizar' });
                     }
@@ -671,38 +974,52 @@
             });
         }
 
-        // 4. Configurar precios de jugadas
-        function renderSetPricesView() {
-            let html = `<h4 class="text-xl font-semibold mb-4">🎲 Precios por jugada</h4>`;
-            playPrices.forEach(p => {
-                html += `
-                    <div class="flex items-center gap-3 mb-3 bg-gray-800/50 p-3 rounded-xl">
-                        <span class="w-24 font-bold">${p.bet_type}</span>
-                        <input type="number" id="price_cup_${p.bet_type}" value="${p.amount_cup}" placeholder="CUP" step="0.01" min="0" class="flex-1 p-2 rounded-lg bg-gray-700 text-white">
-                        <input type="number" id="price_usd_${p.bet_type}" value="${p.amount_usd}" placeholder="USD" step="0.01" min="0" class="flex-1 p-2 rounded-lg bg-gray-700 text-white">
-                        <button onclick="updatePlayPrice('${p.bet_type}')" class="bg-blue-600 px-4 py-2 rounded-lg hover:bg-blue-700">Actualizar</button>
-                    </div>
-                `;
-            });
-            adminViewContainer.innerHTML = html;
+        // ========== CONFIGURAR PRECIOS Y MULTIPLICADORES ==========
+        async function renderSetPricesView() {
+            try {
+                const res = await fetch('/api/play-prices');
+                const prices = await res.json();
+                let html = `<h4 class="text-xl font-semibold mb-4">🎲 Precios y Multiplicadores</h4>`;
+                prices.forEach(p => {
+                    html += `
+                        <div class="flex items-center gap-2 mb-3 bg-gray-800/50 p-3 rounded-xl flex-wrap">
+                            <span class="w-24 font-bold">${p.bet_type}</span>
+                            <input type="number" id="cost_cup_${p.bet_type}" value="${p.amount_cup}" placeholder="Costo CUP" step="0.01" min="0" class="w-20 p-1 rounded bg-gray-700 text-white text-sm">
+                            <input type="number" id="cost_usd_${p.bet_type}" value="${p.amount_usd}" placeholder="Costo USD" step="0.01" min="0" class="w-20 p-1 rounded bg-gray-700 text-white text-sm">
+                            <input type="number" id="multiplier_${p.bet_type}" value="${p.payout_multiplier || 0}" placeholder="Multiplicador" step="0.1" min="0" class="w-24 p-1 rounded bg-gray-700 text-white text-sm">
+                            <button onclick="updatePlayPrice('${p.bet_type}')" class="bg-blue-600 px-3 py-1 rounded-lg text-sm hover:bg-blue-700">Actualizar</button>
+                        </div>
+                    `;
+                });
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar precios.</p>';
+            }
         }
 
         window.updatePlayPrice = async function(betType) {
-            const cup = parseFloat(document.getElementById(`price_cup_${betType}`).value);
-            const usd = parseFloat(document.getElementById(`price_usd_${betType}`).value);
-            if (isNaN(cup) || isNaN(usd) || cup < 0 || usd < 0) {
-                iziToast.warning({ message: 'Montos inválidos' });
+            const cup = parseFloat(document.getElementById(`cost_cup_${betType}`).value);
+            const usd = parseFloat(document.getElementById(`cost_usd_${betType}`).value);
+            const multiplier = parseFloat(document.getElementById(`multiplier_${betType}`).value);
+            if (isNaN(cup) || isNaN(usd) || isNaN(multiplier) || cup < 0 || usd < 0 || multiplier < 0) {
+                iziToast.warning({ message: 'Montos y multiplicador inválidos' });
                 return;
             }
             try {
                 const res = await fetch(`/api/admin/play-prices/${betType}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount_cup: cup, amount_usd: usd, userId: currentUser.telegram_id })
+                    body: JSON.stringify({ 
+                        amount_cup: cup, 
+                        amount_usd: usd, 
+                        payout_multiplier: multiplier,
+                        userId: currentUser.telegram_id 
+                    })
                 });
                 if (res.ok) {
-                    iziToast.success({ message: 'Precio actualizado' });
+                    iziToast.success({ message: 'Precio y multiplicador actualizados' });
                     await loadPlayPrices();
+                    renderSetPricesView();
                 } else {
                     iziToast.error({ message: 'Error al actualizar' });
                 }
@@ -711,155 +1028,29 @@
             }
         };
 
-        // 5. Ver datos actuales
-        function renderViewDataView() {
-            let text = `💰 Tasa: 1 USD = ${exchangeRate} CUP\n\n📥 Métodos DEPÓSITO:\n`;
-            depositMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
-            text += `\n📤 Métodos RETIRO:\n`;
-            withdrawMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
-            text += `\n🎲 Precios por jugada:\n`;
-            playPrices.forEach(p => text += `  • ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD\n`);
-            adminViewContainer.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-sm text-gray-200 bg-gray-800/50 p-4 rounded-xl">${text}</pre>`;
-        }
-
-        // 6. Abrir sesión de lotería (CORREGIDO)
-        function renderOpenSessionView() {
-            adminViewContainer.innerHTML = `
-                <h4 class="text-xl font-semibold mb-4">🎰 Abrir sesión de lotería</h4>
-                <div id="sessionLotterySelection">
-                    <p class="mb-2">Selecciona la lotería:</p>
-                    <div class="grid grid-cols-3 gap-2 mb-4">
-                        <button data-lottery="Florida" class="session-lottery-btn bg-red-600/80 p-3 rounded-xl hover:bg-red-700">Florida</button>
-                        <button data-lottery="Georgia" class="session-lottery-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">Georgia</button>
-                        <button data-lottery="Nueva York" class="session-lottery-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">Nueva York</button>
-                    </div>
-                </div>
-                <div id="sessionSlotSelection" class="hidden">
-                    <p class="mb-2">Selecciona el turno:</p>
-                    <div class="grid grid-cols-3 gap-2">
-                        <button data-slot="morning" class="slot-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700">☀️ Mañana</button>
-                        <button data-slot="afternoon" class="slot-btn bg-orange-600/80 p-3 rounded-xl hover:bg-orange-700">🌆 Tarde</button>
-                        <button data-slot="evening" class="slot-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700">🌙 Noche</button>
-                    </div>
-                    <div class="mt-4">
-                        <button id="cancelSessionBtn" class="bg-gray-600 px-4 py-2 rounded-xl hover:bg-gray-700">Cancelar</button>
-                    </div>
-                </div>
-            `;
-
-            let selectedLottery = '';
-
-            document.querySelectorAll('.session-lottery-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    selectedLottery = e.currentTarget.dataset.lottery;
-                    document.getElementById('sessionLotterySelection').classList.add('hidden');
-                    document.getElementById('sessionSlotSelection').classList.remove('hidden');
-                });
-            });
-
-            document.getElementById('cancelSessionBtn').addEventListener('click', () => {
-                document.getElementById('sessionSlotSelection').classList.add('hidden');
-                document.getElementById('sessionLotterySelection').classList.remove('hidden');
-            });
-
-            document.querySelectorAll('.slot-btn').forEach(btn => {
-                btn.addEventListener('click', async (e) => {
-                    const slot = e.currentTarget.dataset.slot;
-                    const slotNames = { morning: 'Mañana', afternoon: 'Tarde', evening: 'Noche' };
-                    const timeSlot = slotNames[slot];
-                    if (!selectedLottery || !timeSlot) return;
-
-                    // Calcular fecha y hora de cierre
-                    const now = new Date();
-                    const today = now.toISOString().split('T')[0];
-                    let endHour, endMinute;
-                    if (slot === 'morning') { endHour = 12; endMinute = 0; }
-                    else if (slot === 'afternoon') { endHour = 18; endMinute = 30; }
-                    else { endHour = 23; endMinute = 0; }
-
-                    const endTimeStr = `${today} ${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`;
-                    const endTime = new Date(endTimeStr + ' America/Havana').toISOString();
-
-                    try {
-                        iziToast.info({ title: 'Abriendo sesión...', message: 'Espere un momento', timeout: 2000 });
-                        const res = await fetch('/api/admin/lottery-sessions', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                lottery: selectedLottery,
-                                date: today,
-                                time_slot: timeSlot,
-                                end_time: endTime,
-                                userId: currentUser.telegram_id
-                            })
-                        });
-                        const data = await res.json();
-                        if (res.ok) {
-                            iziToast.success({ message: `✅ Sesión de ${selectedLottery} (${timeSlot}) abierta` });
-                            renderViewDataView();
-                        } else {
-                            iziToast.error({ message: `❌ Error: ${data.error || 'No se pudo abrir sesión'}` });
-                        }
-                    } catch (e) {
-                        iziToast.error({ message: 'Error de conexión' });
-                    }
-                });
-            });
-        }
-
-        // 7. Publicar números ganadores
-        async function renderPublishWinningView() {
+        // ========== VER DATOS ACTUALES ==========
+        async function renderViewDataView() {
             try {
-                const res = await fetch('/api/admin/lottery-sessions/closed', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: currentUser.telegram_id })
-                });
-                const sessions = await res.json();
-                let html = `<h4 class="text-xl font-semibold mb-4">🔢 Publicar números ganadores</h4>`;
-                if (sessions.length === 0) {
-                    html += '<p class="text-gray-400">No hay sesiones cerradas.</p>';
-                } else {
-                    html += `<p class="mb-3">Selecciona una sesión:</p>`;
-                    sessions.forEach(s => {
-                        html += `
-                            <div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
-                                <div>
-                                    <span class="font-bold">${s.lottery}</span> - ${s.date} (${s.time_slot})
-                                </div>
-                                <button onclick="publishWinningForSession(${s.id}, '${s.lottery}', '${s.date}', '${s.time_slot}')" class="bg-teal-600 px-4 py-1 rounded-lg text-sm hover:bg-teal-700">
-                                    Publicar
-                                </button>
-                            </div>
-                        `;
-                    });
-                }
-                adminViewContainer.innerHTML = html;
+                const rate = exchangeRate;
+                const depRes = await fetch('/api/deposit-methods');
+                const depMethods = await depRes.json();
+                const witRes = await fetch('/api/withdraw-methods');
+                const witMethods = await witRes.json();
+                const priceRes = await fetch('/api/play-prices');
+                const prices = await priceRes.json();
+
+                let text = `💰 <b>Tasa:</b> 1 USD = ${rate} CUP\n\n📥 <b>Métodos DEPÓSITO:</b>\n`;
+                depMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
+                text += `\n📤 <b>Métodos RETIRO:</b>\n`;
+                witMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
+                text += `\n🎲 <b>Precios por jugada:</b>\n`;
+                prices.forEach(p => text += `  • ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD  (x${p.payout_multiplier || 0})\n`);
+
+                adminViewContainer.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-sm text-gray-200 bg-gray-800/50 p-4 rounded-xl">${text}</pre>`;
             } catch (e) {
-                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones.</p>';
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar datos.</p>';
             }
         }
-
-        window.publishWinningForSession = async function(sessionId, lottery, date, timeSlot) {
-            const numbers = prompt('Ingresa los números ganadores separados por comas (ej: 12,34,56):');
-            if (!numbers) return;
-            const numbersArray = numbers.split(',').map(n => n.trim()).filter(n => n);
-            try {
-                const res = await fetch('/api/admin/winning-numbers', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ lottery, date, time_slot: timeSlot, numbers: numbersArray, userId: currentUser.telegram_id })
-                });
-                if (res.ok) {
-                    iziToast.success({ message: 'Números publicados exitosamente' });
-                    renderViewDataView();
-                } else {
-                    iziToast.error({ message: 'Error al publicar' });
-                }
-            } catch (e) {
-                iziToast.error({ message: 'Error de conexión' });
-            }
-        };
 
         // ------------------------------------------------------------
         // EVENTOS DE ADMIN
@@ -906,14 +1097,28 @@
                 return;
             }
             try {
-                // Simulación sin captura de pantalla en este ejemplo
-                iziToast.success({ message: 'Solicitud de recarga enviada (simulación)' });
-                // Actualizar saldo localmente
-                const parsed = parseAmount(amountText);
-                if (parsed.usd) currentUser.usd += parsed.usd;
-                if (parsed.cup) currentUser.cup += parsed.cup;
-                updateBalanceUI();
-                document.getElementById('rechargeSection').classList.add('hidden');
+                const res = await fetch('/api/deposit-requests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        methodId,
+                        amountText,
+                        userId: currentUser.telegram_id
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    currentUser = data.updatedUser;
+                    updateBalanceUI();
+                    iziToast.success({ message: 'Solicitud de recarga enviada. Se acreditará en breve.' });
+                    document.getElementById('rechargeSection').classList.add('hidden');
+                    document.getElementById('depositAmount').value = '';
+                    document.getElementById('depositMethodSelect').value = '';
+                    document.getElementById('methodDetails').classList.add('hidden');
+                    document.getElementById('submitDepositBtn').disabled = true;
+                } else {
+                    iziToast.error({ message: 'Error al procesar recarga' });
+                }
             } catch (e) {
                 iziToast.error({ message: 'Error de conexión' });
             }
@@ -954,6 +1159,7 @@
                     updateBalanceUI();
                     document.getElementById('withdrawSection').classList.add('hidden');
                     document.getElementById('withdrawAccount').value = '';
+                    document.getElementById('withdrawMethodSelect').value = '';
                 } else {
                     iziToast.error({ message: 'Error al solicitar retiro' });
                 }
@@ -1005,85 +1211,19 @@
         });
 
         // ------------------------------------------------------------
-        // EVENTOS DE JUEGO
+        // FUNCIONES AUXILIARES
         // ------------------------------------------------------------
-        document.querySelectorAll('.lottery-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const lottery = btn.dataset.lottery;
-                document.getElementById('betTypeContainer').classList.remove('hidden');
-                document.getElementById('betTypeContainer').dataset.lottery = lottery;
-            });
-        });
-
-        document.querySelectorAll('.type-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const type = btn.dataset.type;
-                const lottery = document.getElementById('betTypeContainer').dataset.lottery || 'Florida';
-                document.getElementById('betFormContainer').classList.remove('hidden');
-                document.getElementById('betFormContainer').dataset.type = type;
-                document.getElementById('betFormContainer').dataset.lottery = lottery;
-            });
-        });
-
-        document.getElementById('submitBetBtn').addEventListener('click', async () => {
-            const rawText = document.getElementById('betInput').value.trim();
-            const betType = document.getElementById('betFormContainer').dataset.type;
-            const lottery = document.getElementById('betFormContainer').dataset.lottery;
-            if (!rawText || !betType) {
-                iziToast.warning({ title: 'Falta información', message: 'Escribe los números de tu jugada' });
-                return;
-            }
-            try {
-                const res = await fetch('/api/bets', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        userId: currentUser.telegram_id,
-                        lottery,
-                        betType,
-                        rawText
-                    })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    iziToast.success({ title: '✅ Jugada registrada', message: '¡Buena suerte!' });
-                    currentUser = data.updatedUser;
-                    updateBalanceUI();
-                    loadBets();
-                    document.getElementById('betInput').value = '';
-                    showSection('home');
-                } else {
-                    iziToast.error({ title: 'Error', message: data.error || 'No se pudo registrar' });
-                }
-            } catch (e) {
-                iziToast.error({ title: 'Error', message: 'Error de conexión' });
-            }
-        });
-
-        // ------------------------------------------------------------
-        // REFERIDOS: COPIAR ENLACE
-        // ------------------------------------------------------------
-        document.getElementById('copyLinkBtn').addEventListener('click', () => {
-            const link = document.getElementById('referralLink');
-            link.select();
-            document.execCommand('copy');
-            iziToast.success({ title: 'Copiado', message: 'Enlace copiado al portapapeles' });
-        });
-
-        // Función auxiliar para parsear montos
-        function parseAmount(text) {
-            const lower = text.toLowerCase().replace(',', '.').trim();
+        function parseAmountFromLine(line) {
+            line = line.toLowerCase().trim();
             let usd = 0, cup = 0;
-            const usdMatch = lower.match(/(\d+(?:\.\d+)?)\s*usd/);
-            const cupMatch = lower.match(/(\d+(?:\.\d+)?)\s*cup/);
+            const usdMatch = line.match(/(\d+(?:\.\d+)?)\s*usd/);
+            const cupMatch = line.match(/(\d+(?:\.\d+)?)\s*cup/);
             if (usdMatch) usd = parseFloat(usdMatch[1]);
             if (cupMatch) cup = parseFloat(cupMatch[1]);
             return { usd, cup };
         }
 
-        // ------------------------------------------------------------
-        // INICIAR
-        // ------------------------------------------------------------
+        // ========== INICIALIZAR ==========
         initAuth();
     </script>
 </body>
