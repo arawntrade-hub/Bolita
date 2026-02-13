@@ -604,7 +604,7 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Obtener sesiones de una fecha específica (admin) ---
+// --- Obtener sesiones de una fecha específica (admin) - CORREGIDO ---
 app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { date } = req.query;
     if (!date) {
@@ -616,7 +616,6 @@ app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
         .eq('date', date);
     res.json(data || []);
 });
-
 // --- Crear nueva sesión (abrir) ---
 app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { lottery, time_slot } = req.body;
