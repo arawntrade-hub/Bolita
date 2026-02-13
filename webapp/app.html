@@ -206,7 +206,7 @@
                 </div>
             </div>
 
-            <!-- SECCIÓN MI DINERO (WALLET) - Igual que original -->
+            <!-- SECCIÓN MI DINERO (WALLET) -->
             <div id="section-wallet" class="section hidden-section">
                 <div class="glass-card p-5">
                     <h3 class="text-2xl font-bold mb-4">💰 Mi saldo</h3>
@@ -220,10 +220,32 @@
                         <button id="withdrawBtn" class="bg-pink-600 p-3 rounded-xl hover:bg-pink-700 transition"><i class="fas fa-arrow-up mr-1"></i> Retirar</button>
                         <button id="transferBtn" class="bg-gray-600 p-3 rounded-xl hover:bg-gray-700 transition"><i class="fas fa-exchange-alt mr-1"></i> Transferir</button>
                     </div>
-                    <!-- Subsecciones de recarga/retiro/transferencia (igual que original) -->
-                    <div id="rechargeSection" class="hidden mt-6"><!-- ... --></div>
-                    <div id="withdrawSection" class="hidden mt-6"><!-- ... --></div>
-                    <div id="transferSection" class="hidden mt-6"><!-- ... --></div>
+
+                    <!-- Subsección Recargar -->
+                    <div id="rechargeSection" class="hidden mt-6">
+                        <h4 class="text-lg font-semibold mb-3">📥 Recargar saldo</h4>
+                        <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-indigo-500 mb-3"><option>Selecciona método...</option></select>
+                        <input type="file" id="depositScreenshot" accept="image/*" class="file-input mb-3">
+                        <input type="text" id="depositAmount" placeholder="Monto (ej: 10 usd o 500 cup)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-indigo-500 mb-3">
+                        <button id="submitDepositBtn" class="w-full bg-indigo-600 py-3 rounded-xl font-semibold hover:bg-indigo-700">Enviar solicitud</button>
+                    </div>
+
+                    <!-- Subsección Retirar -->
+                    <div id="withdrawSection" class="hidden mt-6">
+                        <h4 class="text-lg font-semibold mb-3">📤 Retirar saldo</h4>
+                        <select id="withdrawMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3"><option>Selecciona método...</option></select>
+                        <input type="text" id="withdrawAccount" placeholder="Número de cuenta / instrucciones" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                        <p class="text-sm text-gray-300 mb-2">Monto a retirar: <span id="withdrawAmountDisplay">0.00 USD</span> (todo tu saldo USD disponible)</p>
+                        <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-3 rounded-xl font-semibold hover:bg-pink-700">Solicitar retiro</button>
+                    </div>
+
+                    <!-- Subsección Transferir -->
+                    <div id="transferSection" class="hidden mt-6">
+                        <h4 class="text-lg font-semibold mb-3">🔄 Transferir saldo</h4>
+                        <input type="number" id="transferTarget" placeholder="ID de Telegram destino" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-gray-500 mb-3">
+                        <input type="number" id="transferAmount" placeholder="Monto en USD" step="0.01" min="0.01" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-gray-500 mb-3">
+                        <button id="submitTransferBtn" class="w-full bg-gray-600 py-3 rounded-xl font-semibold hover:bg-gray-700">Transferir</button>
+                    </div>
                 </div>
             </div>
 
@@ -266,6 +288,8 @@
                         <button data-admin-view="addWithdraw" class="admin-nav-btn bg-pink-600/80 p-3 rounded-xl hover:bg-pink-700"><i class="fas fa-plus mr-1"></i> Añadir Retiro</button>
                         <button data-admin-view="setRate" class="admin-nav-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700"><i class="fas fa-dollar-sign mr-1"></i> Tasa de Cambio</button>
                         <button data-admin-view="setPrices" class="admin-nav-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700"><i class="fas fa-dice mr-1"></i> Precios y Pagos</button>
+                        <button data-admin-view="setMinDeposit" class="admin-nav-btn bg-amber-600/80 p-3 rounded-xl hover:bg-amber-700"><i class="fas fa-arrow-down mr-1"></i> Mín. Depósito</button>
+                        <button data-admin-view="setMinWithdraw" class="admin-nav-btn bg-rose-600/80 p-3 rounded-xl hover:bg-rose-700"><i class="fas fa-arrow-up mr-1"></i> Mín. Retiro</button>
                         <button data-admin-view="viewData" class="admin-nav-btn bg-gray-600/80 p-3 rounded-xl hover:bg-gray-700"><i class="fas fa-eye mr-1"></i> Ver Datos</button>
                     </div>
                     <div id="adminViewContainer" class="mt-4"><p class="text-center text-gray-400">Selecciona una opción</p></div>
@@ -287,17 +311,17 @@
         // ---------- CONFIGURACIÓN DE HORARIOS POR LOTERÍA (hora de Cuba) ----------
         const LOTTERY_SCHEDULES = {
             'Florida': [
-                { name: 'Mañana', start: 9, end: 13 },    // 9am - 1pm
-                { name: 'Noche', start: 14, end: 21 }     // 2pm - 9pm
+                { name: '🌅 Mañana', start: 9, end: 13 },    // 9am - 1pm
+                { name: '🌙 Noche', start: 14, end: 21 }     // 2pm - 9pm
             ],
             'Georgia': [
-                { name: 'Mañana', start: 9, end: 12 },    // 9am - 12pm
-                { name: 'Tarde', start: 14, end: 18.5 },  // 2pm - 6:30pm
-                { name: 'Noche', start: 20, end: 23 }     // 8pm - 11pm
+                { name: '🌅 Mañana', start: 9, end: 12 },    // 9am - 12pm
+                { name: '☀️ Tarde', start: 14, end: 18.5 },  // 2pm - 6:30pm
+                { name: '🌙 Noche', start: 20, end: 23 }     // 8pm - 11pm
             ],
             'Nueva York': [
-                { name: 'Mañana', start: 9, end: 14 },    // 9am - 2pm
-                { name: 'Tarde', start: 15, end: 22 }     // 3pm - 10pm
+                { name: '🌅 Mañana', start: 9, end: 14 },    // 9am - 2pm
+                { name: '☀️ Tarde', start: 15, end: 22 }     // 3pm - 10pm
             ]
         };
 
@@ -352,7 +376,6 @@
             const now = getCurrentCubaTime();
             const currentTotal = now.totalHours;
 
-            // Determinar en qué slot estamos (si alguno)
             let active = null;
             for (const s of slots) {
                 if (currentTotal >= s.start && currentTotal < s.end) {
@@ -361,8 +384,7 @@
                 }
             }
 
-            // Construir mensaje de horarios con formato bonito
-            let scheduleText = `🕒 <b>Horarios ${lottery}:</b> `;
+            let scheduleText = `🕒 <b>Horarios ${lottery}:</b><br>`;
             scheduleText += slots.map(s => {
                 const startStr = s.start % 1 === 0 ? `${s.start}:00` : `${Math.floor(s.start)}:30`;
                 const endStr = s.end % 1 === 0 ? `${s.end}:00` : `${Math.floor(s.end)}:30`;
@@ -376,7 +398,7 @@
             lotteryScheduleInfo.innerHTML = scheduleText;
             lotteryScheduleInfo.classList.remove('hidden');
 
-            return active; // nombre del slot activo o null
+            return active;
         }
 
         // ---------- Al seleccionar lotería ----------
@@ -385,22 +407,19 @@
                 selectedLottery = btn.dataset.lottery;
                 activeSlot = checkLotterySchedule(selectedLottery);
 
-                // Ocultar contenedores de apuesta hasta que se verifique sesión
                 betTypeContainer.classList.add('hidden');
                 betFormContainer.classList.add('hidden');
                 sessionStatus.classList.add('hidden');
 
                 if (!activeSlot) {
-                    // Fuera de horario: mensaje atractivo
                     sessionStatus.innerHTML = `<span class="text-red-400">❌ No hay turno disponible ahora. Revisa los horarios 👆</span>`;
                     sessionStatus.classList.remove('hidden');
                     return;
                 }
 
-                // Hay slot activo, verificar sesión en backend para ese slot
                 const today = new Date().toISOString().split('T')[0];
                 try {
-                    const res = await fetch(`/api/lottery-sessions/active?lottery=${encodeURIComponent(selectedLottery)}&date=${today}&time_slot=${activeSlot}`);
+                    const res = await fetch(`/api/lottery-sessions/active?lottery=${encodeURIComponent(selectedLottery)}&date=${today}&time_slot=${encodeURIComponent(activeSlot)}`);
                     if (!res.ok) throw new Error(`HTTP ${res.status}`);
                     const session = await res.json();
 
@@ -560,7 +579,7 @@
             }
         }
 
-        // Funciones auxiliares (simplificadas, pero funcionales)
+        // Funciones auxiliares
         function updateBalanceUI() {
             if (!currentUser) return;
             document.getElementById('quickBalance').innerText = `${parseFloat(currentUser.usd).toFixed(2)} USD`;
@@ -653,7 +672,7 @@
             return { usd, cup };
         }
 
-        // ---------- Funciones de ADMIN (adaptadas a slots dinámicos) ----------
+        // ---------- Funciones de ADMIN ----------
         async function renderSessionsView() {
             const today = new Date().toISOString().split('T')[0];
             let sessions = [];
@@ -793,17 +812,6 @@
             } catch (e) { iziToast.error({ message: 'Error al cargar ganadores' }); }
         };
 
-        function escapeHTML(str) {
-            return String(str).replace(/[&<>"]/g, function(m) {
-                if (m === '&') return '&amp;';
-                if (m === '<') return '&lt;';
-                if (m === '>') return '&gt;';
-                if (m === '"') return '&quot;';
-                return m;
-            });
-        }
-
-        // Otras vistas admin (simplificadas pero funcionales)
         function renderAddDepositView() {
             adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">➕ Añadir método de DEPÓSITO</h4><input type="text" id="depName" placeholder="Nombre" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3"><input type="text" id="depCard" placeholder="Número de tarjeta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3"><input type="text" id="depConfirm" placeholder="Número a confirmar" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3"><button id="saveDepositMethodBtn" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Guardar</button>`;
             document.getElementById('saveDepositMethodBtn')?.addEventListener('click', async () => {
@@ -863,14 +871,17 @@
             try {
                 const res = await fetch('/api/play-prices');
                 const prices = await res.json();
-                let html = `<h4 class="text-xl font-semibold mb-4">🎲 Precios y Multiplicadores</h4>`;
+                let html = `<h4 class="text-xl font-semibold mb-4">🎲 Precios y Pagos (Global)</h4>`;
                 prices.forEach(p => {
-                    html += `<div class="flex items-center gap-2 mb-3 bg-gray-800/50 p-3 rounded-xl flex-wrap">
-                        <span class="w-24 font-bold">${p.bet_type}</span>
-                        <input type="number" id="cost_cup_${p.bet_type}" value="${p.amount_cup}" placeholder="Costo CUP" step="0.01" min="0" class="w-20 p-1 rounded bg-gray-700 text-white text-sm">
-                        <input type="number" id="cost_usd_${p.bet_type}" value="${p.amount_usd}" placeholder="Costo USD" step="0.01" min="0" class="w-20 p-1 rounded bg-gray-700 text-white text-sm">
-                        <input type="number" id="multiplier_${p.bet_type}" value="${p.payout_multiplier || 500}" placeholder="Multiplicador" step="0.1" min="0" class="w-24 p-1 rounded bg-gray-700 text-white text-sm">
-                        <button onclick="updatePlayPrice('${p.bet_type}')" class="bg-blue-600 px-3 py-1 rounded-lg text-sm hover:bg-blue-700">Actualizar</button>
+                    html += `<div class="flex flex-col gap-2 mb-4 bg-gray-800/50 p-4 rounded-xl">
+                        <span class="font-bold text-lg">${p.bet_type}</span>
+                        <div class="flex flex-wrap gap-2">
+                            <input type="text" id="cost_${p.bet_type}" value="${p.amount_cup}/${p.amount_usd}" placeholder="cup/usd" class="flex-1 p-2 rounded bg-gray-700 text-white text-sm">
+                            <input type="number" id="multiplier_${p.bet_type}" value="${p.payout_multiplier || 500}" placeholder="Multiplicador" step="0.1" min="0" class="w-24 p-2 rounded bg-gray-700 text-white text-sm">
+                            <input type="number" id="min_cup_${p.bet_type}" value="${p.min_cup || 0}" placeholder="Min CUP" step="0.01" min="0" class="w-20 p-2 rounded bg-gray-700 text-white text-sm">
+                            <input type="number" id="min_usd_${p.bet_type}" value="${p.min_usd || 0}" placeholder="Min USD" step="0.01" min="0" class="w-20 p-2 rounded bg-gray-700 text-white text-sm">
+                            <button onclick="updatePlayPrice('${p.bet_type}')" class="bg-blue-600 px-4 py-2 rounded-lg text-sm hover:bg-blue-700">Actualizar</button>
+                        </div>
                     </div>`;
                 });
                 adminViewContainer.innerHTML = html;
@@ -878,24 +889,73 @@
         }
 
         window.updatePlayPrice = async (betType) => {
-            const cup = parseFloat(document.getElementById(`cost_cup_${betType}`).value);
-            const usd = parseFloat(document.getElementById(`cost_usd_${betType}`).value);
+            const costStr = document.getElementById(`cost_${betType}`).value;
+            const parts = costStr.split('/');
+            if (parts.length !== 2) { iziToast.warning({ message: 'Formato inválido. Use cup/usd' }); return; }
+            const cup = parseFloat(parts[0].replace(',', '.'));
+            const usd = parseFloat(parts[1].replace(',', '.'));
             const multiplier = parseFloat(document.getElementById(`multiplier_${betType}`).value);
-            if (isNaN(cup) || isNaN(usd) || isNaN(multiplier) || cup < 0 || usd < 0 || multiplier < 0) { iziToast.warning({ message: 'Montos inválidos' }); return; }
+            const minCup = parseFloat(document.getElementById(`min_cup_${betType}`).value);
+            const minUsd = parseFloat(document.getElementById(`min_usd_${betType}`).value);
+            if (isNaN(cup) || isNaN(usd) || isNaN(multiplier) || isNaN(minCup) || isNaN(minUsd) || cup < 0 || usd < 0 || multiplier < 0 || minCup < 0 || minUsd < 0) {
+                iziToast.warning({ message: 'Montos inválidos' }); return;
+            }
             try {
                 const res = await fetch(`/api/admin/play-prices/${betType}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount_cup: cup, amount_usd: usd, payout_multiplier: multiplier, userId: currentUser.telegram_id })
+                    body: JSON.stringify({ amount_cup: cup, amount_usd: usd, payout_multiplier: multiplier, min_cup: minCup, min_usd: minUsd, userId: currentUser.telegram_id })
                 });
-                if (res.ok) { iziToast.success({ message: 'Precio actualizado' }); await loadPlayPrices(); renderSetPricesView(); }
-                else { const err = await res.json(); iziToast.error({ message: err.error }); }
+                if (res.ok) {
+                    iziToast.success({ message: 'Precio actualizado' });
+                    await loadPlayPrices();
+                    renderSetPricesView();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error });
+                }
             } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
         };
+
+        function renderSetMinDepositView() {
+            adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">💰 Mínimo de depósito (USD)</h4><input type="number" id="minDeposit" step="0.01" min="0" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-amber-500 mb-3"><button id="saveMinDeposit" class="w-full bg-amber-600 py-3 rounded-xl font-semibold hover:bg-amber-700">Guardar</button>`;
+            document.getElementById('saveMinDeposit')?.addEventListener('click', async () => {
+                const val = parseFloat(document.getElementById('minDeposit').value);
+                if (isNaN(val) || val < 0) { iziToast.warning({ message: 'Valor inválido' }); return; }
+                try {
+                    const res = await fetch('/api/admin/min-deposit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ value: val, userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) iziToast.success({ message: 'Mínimo actualizado' });
+                    else iziToast.error({ message: 'Error' });
+                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+            });
+        }
+
+        function renderSetMinWithdrawView() {
+            adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">💰 Mínimo de retiro (USD)</h4><input type="number" id="minWithdraw" step="0.01" min="0" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-rose-500 mb-3"><button id="saveMinWithdraw" class="w-full bg-rose-600 py-3 rounded-xl font-semibold hover:bg-rose-700">Guardar</button>`;
+            document.getElementById('saveMinWithdraw')?.addEventListener('click', async () => {
+                const val = parseFloat(document.getElementById('minWithdraw').value);
+                if (isNaN(val) || val < 0) { iziToast.warning({ message: 'Valor inválido' }); return; }
+                try {
+                    const res = await fetch('/api/admin/min-withdraw', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ value: val, userId: currentUser.telegram_id })
+                    });
+                    if (res.ok) iziToast.success({ message: 'Mínimo actualizado' });
+                    else iziToast.error({ message: 'Error' });
+                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+            });
+        }
 
         async function renderViewDataView() {
             try {
                 const rate = exchangeRate;
+                const minDep = await fetch('/api/app-config/min-deposit').then(r=>r.json()).catch(()=>({value:1}));
+                const minWit = await fetch('/api/app-config/min-withdraw').then(r=>r.json()).catch(()=>({value:1}));
                 const depRes = await fetch('/api/deposit-methods');
                 const depMethods = await depRes.json();
                 const witRes = await fetch('/api/withdraw-methods');
@@ -903,12 +963,15 @@
                 const priceRes = await fetch('/api/play-prices');
                 const prices = await priceRes.json();
 
-                let text = `💰 <b>Tasa:</b> 1 USD = ${rate} CUP\n\n📥 <b>Métodos DEPÓSITO:</b>\n`;
+                let text = `💰 <b>Tasa:</b> 1 USD = ${rate} CUP\n`;
+                text += `📥 <b>Mínimo depósito:</b> ${minDep.value} USD\n`;
+                text += `📤 <b>Mínimo retiro:</b> ${minWit.value} USD\n\n`;
+                text += `📥 <b>Métodos DEPÓSITO:</b>\n`;
                 depMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
                 text += `\n📤 <b>Métodos RETIRO:</b>\n`;
                 witMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
-                text += `\n🎲 <b>Precios por jugada:</b>\n`;
-                prices.forEach(p => text += `  • ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD  (x${p.payout_multiplier || 0})\n`);
+                text += `\n🎲 <b>Precios por jugada (globales):</b>\n`;
+                prices.forEach(p => text += `  • ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD  (x${p.payout_multiplier || 0})  (mín: ${p.min_cup||0} CUP / ${p.min_usd||0} USD)\n`);
 
                 adminViewContainer.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-sm text-gray-200 bg-gray-800/50 p-4 rounded-xl">${text}</pre>`;
             } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar datos.</p>'; }
@@ -924,14 +987,112 @@
                 else if (view === 'addWithdraw') renderAddWithdrawView();
                 else if (view === 'setRate') renderSetRateView();
                 else if (view === 'setPrices') renderSetPricesView();
+                else if (view === 'setMinDeposit') renderSetMinDepositView();
+                else if (view === 'setMinWithdraw') renderSetMinWithdrawView();
                 else if (view === 'viewData') renderViewDataView();
             });
         });
 
+        // ---------- Manejadores de depósito, retiro, transferencia (simplificados) ----------
+        document.getElementById('rechargeBtn').addEventListener('click', () => {
+            document.getElementById('rechargeSection').classList.toggle('hidden');
+        });
+        document.getElementById('withdrawBtn').addEventListener('click', () => {
+            document.getElementById('withdrawSection').classList.toggle('hidden');
+            document.getElementById('withdrawAmountDisplay').innerText = currentUser ? parseFloat(currentUser.usd).toFixed(2) + ' USD' : '0.00 USD';
+        });
+        document.getElementById('transferBtn').addEventListener('click', () => {
+            document.getElementById('transferSection').classList.toggle('hidden');
+        });
+
+        document.getElementById('submitDepositBtn').addEventListener('click', async () => {
+            const methodId = document.getElementById('depositMethodSelect').value;
+            const file = document.getElementById('depositScreenshot').files[0];
+            const amount = document.getElementById('depositAmount').value.trim();
+            if (!methodId || !file || !amount) { iziToast.warning({ message: 'Completa todos los campos' }); return; }
+            const formData = new FormData();
+            formData.append('methodId', methodId);
+            formData.append('userId', currentUser.telegram_id);
+            formData.append('amount', amount);
+            formData.append('screenshot', file);
+            try {
+                const res = await fetch('/api/deposit-requests', { method: 'POST', body: formData });
+                if (res.ok) {
+                    iziToast.success({ message: 'Solicitud enviada' });
+                    document.getElementById('rechargeSection').classList.add('hidden');
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error' });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        });
+
+        document.getElementById('submitWithdrawBtn').addEventListener('click', async () => {
+            const methodId = document.getElementById('withdrawMethodSelect').value;
+            const account = document.getElementById('withdrawAccount').value.trim();
+            const amount = parseFloat(currentUser.usd);
+            if (!methodId || !account) { iziToast.warning({ message: 'Completa todos los campos' }); return; }
+            try {
+                const res = await fetch('/api/withdraw-requests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ methodId, amount, account, userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Solicitud enviada' });
+                    document.getElementById('withdrawSection').classList.add('hidden');
+                    currentUser.usd = 0; // actualización local rápida (luego se recargará)
+                    updateBalanceUI();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error' });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        });
+
+        document.getElementById('submitTransferBtn').addEventListener('click', async () => {
+            const to = parseInt(document.getElementById('transferTarget').value);
+            const amount = parseFloat(document.getElementById('transferAmount').value);
+            if (!to || isNaN(amount) || amount <= 0) { iziToast.warning({ message: 'Datos inválidos' }); return; }
+            if (amount > parseFloat(currentUser.usd)) { iziToast.warning({ message: 'Saldo insuficiente' }); return; }
+            try {
+                const res = await fetch('/api/transfer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ from: currentUser.telegram_id, to, amount })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Transferencia realizada' });
+                    document.getElementById('transferSection').classList.add('hidden');
+                    currentUser.usd -= amount;
+                    updateBalanceUI();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error' });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        });
+
+        document.getElementById('copyLinkBtn').addEventListener('click', () => {
+            const link = document.getElementById('referralLink');
+            link.select();
+            document.execCommand('copy');
+            iziToast.success({ message: 'Enlace copiado' });
+        });
+
+        function escapeHTML(str) {
+            return String(str).replace(/[&<>"]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                if (m === '"') return '&quot;';
+                return m;
+            });
+        }
+
         // Inicializar
         initAuth();
 
-        // Timeout de seguridad
         setTimeout(() => {
             if (!globalLoader.classList.contains('hidden')) {
                 globalLoader.classList.add('hidden');
