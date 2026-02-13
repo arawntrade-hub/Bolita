@@ -1,8 +1,8 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión final con gestión de sesiones por región (Día/Noche),
-// moment-timezone, teclados reorganizados, parseo exacto de apuestas,
-// cálculo de premios con número de 7 dígitos.
+// Versión final con notificaciones globales (broadcast) al abrir/cerrar sesiones
+// y al publicar números ganadores. Mensajes más inspiradores.
+// Incluye toda la funcionalidad: apuestas, recargas, retiros, transferencias, admin, etc.
 // ==============================
 
 require('dotenv').config();
@@ -106,7 +106,6 @@ function parseAmount(text) {
     return { usd, cup };
 }
 
-// ========== PARSEO DE APUESTAS ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return null;
@@ -163,20 +162,34 @@ function parseBetMessage(text, betType) {
     };
 }
 
-// ========== FUNCIÓN PARA HORA DE CIERRE (CORREGIDA) ==========
 function getEndTimeFromSlot(timeSlot) {
     const now = moment.tz(TIMEZONE);
     let hour, minute;
     if (timeSlot === 'Día') {
         hour = 12;
         minute = 0;
-    } else { // Noche
+    } else {
         hour = 23;
         minute = 0;
     }
-    // Crear fecha directamente con set, sin concatenar strings
     const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
     return endTime.toDate();
+}
+
+// ========== FUNCIÓN DE BROADCAST (con delay) ==========
+async function broadcastToAllUsers(message, parseMode = 'HTML') {
+    const { data: users } = await supabase
+        .from('users')
+        .select('telegram_id');
+
+    for (const u of users || []) {
+        try {
+            await bot.telegram.sendMessage(u.telegram_id, message, { parse_mode: parseMode });
+            await new Promise(resolve => setTimeout(resolve, 30)); // evitar flood
+        } catch (e) {
+            console.warn(`Error enviando broadcast a ${u.telegram_id}:`, e.message);
+        }
+    }
 }
 
 // ========== MIDDLEWARE: USUARIO ==========
@@ -685,20 +698,14 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
 
         await ctx.answerCbQuery('✅ Sesión abierta');
 
-        // Notificar a todos los usuarios
-        const { data: users } = await supabase.from('users').select('telegram_id');
-        for (const u of users || []) {
-            try {
-                await bot.telegram.sendMessage(u.telegram_id,
-                    `📢 <b>SESIÓN ABIERTA</b>\n\n` +
-                    `🎰 <b>${escapeHTML(lottery)}</b> - Turno <b>${escapeHTML(timeSlot)}</b>\n` +
-                    `📅 Fecha: ${today}\n` +
-                    `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n\n` +
-                    `💬 ¡Ya puedes realizar tus apuestas!`,
-                    { parse_mode: 'HTML' }
-                );
-            } catch (e) {}
-        }
+        // --- BROADCAST INSPIRADOR A TODOS LOS USUARIOS ---
+        await broadcastToAllUsers(
+            `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
+            `✨ La región <b>${escapeHTML(lottery)}</b> acaba de abrir su turno de <b>${escapeHTML(timeSlot)}</b>.\n` +
+            `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
+            `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
+            `🍀 ¡La suerte te espera!`
+        );
 
         await showRegionSessions(ctx, lottery);
     } catch (e) {
@@ -729,27 +736,14 @@ bot.action(/toggle_session_(\d+)_(.+)/, async (ctx) => {
             .single();
 
         if (newStatus === 'closed') {
-            const { data: bets } = await supabase
-                .from('bets')
-                .select('user_id')
-                .eq('session_id', sessionId);
-
-            const notified = new Set();
-            for (const bet of bets || []) {
-                if (!notified.has(bet.user_id)) {
-                    try {
-                        await bot.telegram.sendMessage(bet.user_id,
-                            `⏰ <b>SESIÓN CERRADA</b>\n\n` +
-                            `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
-                            `📅 Fecha: ${session.date}\n\n` +
-                            `El tiempo para apostar ha terminado.\n` +
-                            `Pronto se publicarán los números ganadores.`,
-                            { parse_mode: 'HTML' }
-                        );
-                    } catch (e) {}
-                    notified.add(bet.user_id);
-                }
-            }
+            // --- BROADCAST DE CIERRE A TODOS LOS USUARIOS ---
+            await broadcastToAllUsers(
+                `🔴 <b>SESIÓN CERRADA</b>\n\n` +
+                `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
+                `📅 Fecha: ${session.date}\n\n` +
+                `❌ Ya no se reciben más apuestas.\n` +
+                `🔢 Pronto anunciaremos el número ganador. ¡Muy atento!`
+            );
         }
 
         await ctx.answerCbQuery(newStatus === 'open' ? '✅ Sesión abierta' : '🔴 Sesión cerrada');
@@ -903,6 +897,20 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         return false;
     }
 
+    // Verificar que no se haya publicado ya
+    const { data: existingWin } = await supabase
+        .from('winning_numbers')
+        .select('id')
+        .eq('lottery', session.lottery)
+        .eq('date', session.date)
+        .eq('time_slot', session.time_slot)
+        .maybeSingle();
+
+    if (existingWin) {
+        await ctx.reply('❌ Esta sesión ya tiene un número ganador publicado.');
+        return false;
+    }
+
     const centena = winningStr.slice(0, 3);
     const cuarteta = winningStr.slice(3);
     const fijo = centena.slice(1);
@@ -1016,6 +1024,15 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
             } catch (e) {}
         }
     }
+
+    // --- BROADCAST GLOBAL DEL NÚMERO GANADOR ---
+    await broadcastToAllUsers(
+        `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
+        `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
+        `📅 Fecha: ${session.date}\n` +
+        `🔢 Número: <code>${winningStr}</code>\n\n` +
+        `💬 Revisa tu historial para ver si has ganado. ¡Suerte en la próxima!`
+    );
 
     await ctx.reply(`✅ Números ganadores publicados y premios calculados.`);
     return true;
@@ -1489,26 +1506,14 @@ async function closeExpiredSessions() {
                 .update({ status: 'closed', updated_at: new Date() })
                 .eq('id', session.id);
 
-            const { data: bets } = await supabase
-                .from('bets')
-                .select('user_id')
-                .eq('session_id', session.id);
-
-            const notified = new Set();
-            for (const bet of bets || []) {
-                if (!notified.has(bet.user_id)) {
-                    try {
-                        await bot.telegram.sendMessage(bet.user_id,
-                            `⏰ <b>SESIÓN CERRADA AUTOMÁTICAMENTE</b>\n\n` +
-                            `🎰 ${escapeHTML(session.lottery)} - ${escapeHTML(session.time_slot)}\n` +
-                            `📅 ${session.date}\n\n` +
-                            `El tiempo ha finalizado. Pronto se publicarán los resultados.`,
-                            { parse_mode: 'HTML' }
-                        );
-                    } catch (e) {}
-                    notified.add(bet.user_id);
-                }
-            }
+            // --- BROADCAST DE CIERRE AUTOMÁTICO ---
+            await broadcastToAllUsers(
+                `⏰ <b>SESIÓN CERRADA AUTOMÁTICAMENTE</b>\n\n` +
+                `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
+                `📅 Fecha: ${session.date}\n\n` +
+                `❌ El tiempo para apostar ha finalizado.\n` +
+                `🔢 Pronto se publicará el número ganador. ¡Gracias por participar!`
+            );
         }
     } catch (e) {
         console.error('Error cerrando sesiones:', e);
