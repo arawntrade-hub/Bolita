@@ -1,6 +1,8 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Flujo simplificado, sesiones de lotería, cierre automático
+// Versión final con gestión de sesiones, parseo exacto de apuestas,
+// cálculo de premios por número individual y multiplicadores configurables.
+// Teclados reorganizados en filas de 2 botones.
 // ==============================
 
 require('dotenv').config();
@@ -33,9 +35,10 @@ bot.use(localSession.middleware());
 // ========== FUNCIONES AUXILIARES ==========
 
 /**
- * Escapa caracteres especiales para HTML (parse_mode = 'HTML')
+ * Escapa caracteres HTML.
  */
 function escapeHTML(text) {
+    if (!text) return '';
     return String(text)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -45,7 +48,7 @@ function escapeHTML(text) {
 }
 
 /**
- * Envía o edita un mensaje con parse_mode HTML y maneja errores.
+ * Envía o edita un mensaje con parse_mode HTML.
  */
 async function safeEdit(ctx, text, keyboard = null) {
     try {
@@ -68,9 +71,7 @@ async function safeEdit(ctx, text, keyboard = null) {
                 parse_mode: 'HTML',
                 reply_markup: keyboard?.reply_markup
             });
-        } catch (e) {
-            console.error('No se pudo enviar el mensaje:', e);
-        }
+        } catch (e) {}
     }
 }
 
@@ -108,15 +109,7 @@ async function getExchangeRate() {
 }
 
 /**
- * Convierte CUP a USD según tasa actual.
- */
-async function cupToUsd(cup) {
-    const rate = await getExchangeRate();
-    return cup / rate;
-}
-
-/**
- * Parsea un string para extraer monto y moneda (ej: "10 usd", "500 cup").
+ * Parsea un string para extraer monto total en USD y CUP (ej: "10 usd", "500 cup").
  */
 function parseAmount(text) {
     const lower = text.toLowerCase().replace(',', '.').trim();
@@ -128,40 +121,81 @@ function parseAmount(text) {
     return { usd, cup };
 }
 
+// ========== PARSEO DE APUESTAS (INDIVIDUAL POR LÍNEA) ==========
+
 /**
- * Parsea el costo de una jugada.
- * Si el mensaje contiene un monto (ej: "10 usd"), usa ese; si no, usa los precios por defecto.
+ * Parsea una línea de apuesta y devuelve { numero, usd, cup } o null si es inválida.
+ * Formatos aceptados:
+ *   - "12 con 5 usd"  o "12*5usd"
+ *   - "12 con 2 cup"  o "12*2cup"
+ *   - "12 con 1.5"   (asume USD)
+ *   - "12*1.5"       (asume USD)
+ * Para centenas: 123 con 2 usd, etc.
+ * Para parles: 12x34 con 1 usd, etc.
  */
-async function parseBetCost(raw, betType) {
-    const { data: priceData } = await supabase
-        .from('play_prices')
-        .select('amount_usd, amount_cup')
-        .eq('bet_type', betType)
-        .single();
+function parseBetLine(line, betType) {
+    line = line.trim().toLowerCase();
+    if (!line) return null;
 
-    const defaultPrices = priceData || { amount_usd: 0.2, amount_cup: 70 };
-    const lower = raw.toLowerCase();
+    let numero, montoStr, moneda = 'usd';
+    const match = line.match(/^([\dx]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/);
+    if (!match) return null;
 
-    let usdCost = 0, cupCost = 0;
-    const pattern = /(\d+(?:\.\d+)?)\s*(usd|cup)/g;
-    let match, lastMatch = null;
-    while ((match = pattern.exec(lower)) !== null) lastMatch = match;
+    numero = match[1].trim();
+    montoStr = match[2];
+    if (match[3]) moneda = match[3];
 
-    if (lastMatch) {
-        const val = parseFloat(lastMatch[1]);
-        if (lastMatch[2] === 'usd') usdCost = val;
-        else cupCost = val;
+    // Validar formato según tipo
+    if (betType === 'fijo' || betType === 'corridos') {
+        if (!/^\d{2}$/.test(numero) && !/^[DdTt]\d$/.test(numero)) return null;
+        // Normalizar D2 → 02, T5 → 50
+        if (/^[Dd](\d)$/.test(numero)) numero = '0' + numero.slice(1);
+        if (/^[Tt](\d)$/.test(numero)) numero = numero.slice(1) + '0';
+    } else if (betType === 'centena') {
+        if (!/^\d{3}$/.test(numero)) return null;
+    } else if (betType === 'parle') {
+        if (!/^\d{2}x\d{2}$/.test(numero)) return null;
     } else {
-        usdCost = defaultPrices.amount_usd;
-        cupCost = defaultPrices.amount_cup;
+        return null;
     }
 
-    return { ok: usdCost > 0 || cupCost > 0, usdCost, cupCost };
+    const monto = parseFloat(montoStr);
+    if (isNaN(monto) || monto <= 0) return null;
+
+    return {
+        numero,
+        usd: moneda === 'usd' ? monto : 0,
+        cup: moneda === 'cup' ? monto : 0
+    };
 }
 
 /**
- * Middleware: carga el usuario actual en ctx.dbUser.
+ * Parsea el mensaje completo de apuesta (varias líneas).
+ * Retorna { items, totalUSD, totalCUP, ok }.
  */
+function parseBetMessage(text, betType) {
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+    const items = [];
+    let totalUSD = 0, totalCUP = 0;
+
+    for (const line of lines) {
+        const parsed = parseBetLine(line, betType);
+        if (parsed) {
+            items.push(parsed);
+            totalUSD += parsed.usd;
+            totalCUP += parsed.cup;
+        }
+    }
+
+    return {
+        items,
+        totalUSD,
+        totalCUP,
+        ok: items.length > 0
+    };
+}
+
+// ========== MIDDLEWARE: CARGAR USUARIO ==========
 bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (uid) {
@@ -175,58 +209,77 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// ========== TECLADOS (INLINE KEYBOARDS) ==========
+// ========== TECLADOS REORGANIZADOS (FILAS DE 2 BOTONES) ==========
+
+/**
+ * Construye un teclado inline con filas de hasta `cols` botones.
+ * Útil para mantener consistencia.
+ */
+function buildKeyboard(buttons, cols = 2) {
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += cols) {
+        rows.push(buttons.slice(i, i + cols));
+    }
+    return Markup.inlineKeyboard(rows);
+}
 
 function mainMenuKbd() {
-    return Markup.inlineKeyboard([
-        [Markup.button.callback('🎲 Jugar', 'play')],
-        [Markup.button.callback('💰 Mi dinero', 'my_money')],
-        [Markup.button.callback('📋 Mis jugadas', 'my_bets')],
-        [Markup.button.callback('👥 Referidos', 'referrals')],
-        [Markup.button.callback('❓ Cómo jugar', 'how_to_play')],
-        [Markup.button.callback('🔧 Admin', 'admin_panel')],
-        [Markup.button.webApp('🌐 Abrir WebApp', `${WEBAPP_URL}/app.html`)]
-    ]);
+    const buttons = [
+        Markup.button.callback('🎲 Jugar', 'play'),
+        Markup.button.callback('💰 Mi dinero', 'my_money'),
+        Markup.button.callback('📋 Mis jugadas', 'my_bets'),
+        Markup.button.callback('👥 Referidos', 'referrals'),
+        Markup.button.callback('❓ Cómo jugar', 'how_to_play'),
+        Markup.button.callback('🔧 Admin', 'admin_panel'),
+        Markup.button.webApp('🌐 Abrir WebApp', `${WEBAPP_URL}/app.html`)
+    ];
+    // 2 por fila, la última fila tendrá 1 botón (WebApp solo)
+    return buildKeyboard(buttons, 2);
 }
 
 function playLotteryKbd() {
-    return Markup.inlineKeyboard([
-        [Markup.button.callback('🦩 Florida', 'lot_florida'), Markup.button.callback('🍑 Georgia', 'lot_georgia')],
-        [Markup.button.callback('🗽 Nueva York', 'lot_newyork')],
-        [Markup.button.callback('◀ Volver', 'main')]
-    ]);
+    const buttons = [
+        Markup.button.callback('🦩 Florida', 'lot_florida'),
+        Markup.button.callback('🍑 Georgia', 'lot_georgia'),
+        Markup.button.callback('🗽 Nueva York', 'lot_newyork'),
+        Markup.button.callback('◀ Volver', 'main')
+    ];
+    return buildKeyboard(buttons, 2);
 }
 
 function playTypeKbd() {
-    return Markup.inlineKeyboard([
-        [Markup.button.callback('🎯 Fijo', 'type_fijo')],
-        [Markup.button.callback('🏃 Corridos', 'type_corridos')],
-        [Markup.button.callback('💯 Centena', 'type_centena')],
-        [Markup.button.callback('🔒 Parle', 'type_parle')],
-        [Markup.button.callback('◀ Volver', 'play')]
-    ]);
+    const buttons = [
+        Markup.button.callback('🎯 Fijo', 'type_fijo'),
+        Markup.button.callback('🏃 Corridos', 'type_corridos'),
+        Markup.button.callback('💯 Centena', 'type_centena'),
+        Markup.button.callback('🔒 Parle', 'type_parle'),
+        Markup.button.callback('◀ Volver', 'play')
+    ];
+    return buildKeyboard(buttons, 2);
 }
 
 function myMoneyKbd() {
-    return Markup.inlineKeyboard([
-        [Markup.button.callback('📥 Recargar', 'recharge')],
-        [Markup.button.callback('📤 Retirar', 'withdraw')],
-        [Markup.button.callback('🔄 Transferir', 'transfer')],
-        [Markup.button.callback('◀ Volver', 'main')]
-    ]);
+    const buttons = [
+        Markup.button.callback('📥 Recargar', 'recharge'),
+        Markup.button.callback('📤 Retirar', 'withdraw'),
+        Markup.button.callback('🔄 Transferir', 'transfer'),
+        Markup.button.callback('◀ Volver', 'main')
+    ];
+    return buildKeyboard(buttons, 2);
 }
 
 function adminPanelKbd() {
-    return Markup.inlineKeyboard([
-        [Markup.button.callback('➕ Añadir método DEPÓSITO', 'adm_add_dep')],
-        [Markup.button.callback('➕ Añadir método RETIRO', 'adm_add_wit')],
-        [Markup.button.callback('💰 Configurar tasa USD/CUP', 'adm_set_rate')],
-        [Markup.button.callback('🎲 Configurar precios de jugadas', 'adm_set_price')],
-        [Markup.button.callback('📋 Ver datos actuales', 'adm_view')],
-        [Markup.button.callback('🎰 Abrir sesión de lotería', 'adm_open_session')],
-        [Markup.button.callback('🔢 Publicar números ganadores', 'adm_winning_numbers')],
-        [Markup.button.callback('◀ Menú principal', 'main')]
-    ]);
+    const buttons = [
+        Markup.button.callback('🎰 Gestionar sesiones', 'admin_sessions'),
+        Markup.button.callback('🔢 Publicar ganadores', 'admin_winning'),
+        Markup.button.callback('➕ Añadir método DEPÓSITO', 'adm_add_dep'),
+        Markup.button.callback('➕ Añadir método RETIRO', 'adm_add_wit'),
+        Markup.button.callback('💰 Configurar tasa USD/CUP', 'adm_set_rate'),
+        Markup.button.callback('🎲 Configurar precios y pagos', 'adm_set_prices'),
+        Markup.button.callback('📋 Ver datos actuales', 'adm_view'),
+        Markup.button.callback('◀ Menú principal', 'main')
+    ];
+    return buildKeyboard(buttons, 2);
 }
 
 // ========== COMANDO /start ==========
@@ -246,16 +299,21 @@ bot.start(async (ctx) => {
     }
 
     await safeEdit(ctx,
-        `¡Hola de nuevo, <b>${firstName}</b> 👋\nBienvenido de regreso a Rifas Cuba, tu asistente de la suerte 🍀\n\n🎲 ¿Listo para jugar?\nApuesta, gana y disfruta. ¡La suerte está de tu lado!`,
+        `¡Hola de nuevo, ${escapeHTML(firstName)}! 👋\n` +
+        `Bienvenido de regreso a Rifas Cuba, tu asistente de la suerte 🍀\n\n` +
+        `🎲 ¿Listo para jugar?\n` +
+        `Apuesta, gana y disfruta. ¡La suerte está de tu lado!`,
         mainMenuKbd()
     );
 });
 
-// ========== CALLBACKS DEL MENÚ PRINCIPAL ==========
 bot.action('main', async (ctx) => {
     const firstName = ctx.from.first_name || 'Jugador';
     await safeEdit(ctx,
-        `¡Hola de nuevo, <b>${firstName}</b> 👋\nBienvenido de regreso a Rifas Cuba, tu asistente de la suerte 🍀\n\n🎲 ¿Listo para jugar?\nApuesta, gana y disfruta. ¡La suerte está de tu lado!`,
+        `¡Hola de nuevo, ${escapeHTML(firstName)}! 👋\n` +
+        `Bienvenido de regreso a Rifas Cuba, tu asistente de la suerte 🍀\n\n` +
+        `🎲 ¿Listo para jugar?\n` +
+        `Apuesta, gana y disfruta. ¡La suerte está de tu lado!`,
         mainMenuKbd()
     );
 });
@@ -291,8 +349,28 @@ bot.action(/lot_(.+)/, async (ctx) => {
         }
     }
 
+    // Verificar sesión abierta hoy
+    const today = new Date().toISOString().split('T')[0];
+    const { data: activeSession } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('lottery', lotteryName)
+        .eq('date', today)
+        .eq('status', 'open')
+        .maybeSingle();
+
+    if (!activeSession) {
+        await ctx.answerCbQuery('❌ No hay una sesión abierta para esta lotería en el día de hoy.', { show_alert: true });
+        return;
+    }
+
     ctx.session.lottery = lotteryName;
-    await safeEdit(ctx, `Has seleccionado <b>${lotteryName}</b>. Ahora elige el tipo de jugada:`, playTypeKbd());
+    ctx.session.sessionId = activeSession.id;
+    await safeEdit(ctx,
+        `Has seleccionado <b>${escapeHTML(lotteryName)}</b> - Turno <b>${escapeHTML(activeSession.time_slot)}</b>.\n` +
+        `Ahora elige el tipo de jugada:`,
+        playTypeKbd()
+    );
 });
 
 bot.action(/type_(.+)/, async (ctx) => {
@@ -304,16 +382,33 @@ bot.action(/type_(.+)/, async (ctx) => {
     let instructions = '';
     switch (betType) {
         case 'fijo':
-            instructions = `🎯 <b>Jugada FIJO</b> - 🦩 ${lottery}\n\n📌 Escribe cada número con su valor específico:\n\n📖 <b>Ejemplos:</b>\n• 12 con 1 usd, 34 con 2 usd\n• 7*1.5usd, 23*2 cup\nEn caso de decenas y terminal:\n• D2 con 1 usd, T5*2 cup\n\n⚡ Se procesará inmediatamente\n\n💭 <b>Escribe tus números:</b>`;
+            instructions = `🎯 <b>FIJO</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                `Escribe UNA LÍNEA por cada número de 2 DÍGITOS.\n` +
+                `<b>Formato:</b> <code>12 con 5 usd</code>  o  <code>34*2cup</code>\n` +
+                `También D2 (decena) o T5 (terminal).\n\n` +
+                `Ejemplo:\n12 con 1 usd\n34*2 usd\n89 con 5 cup\n\n` +
+                `💭 <b>Escribe tus jugadas (una por línea):</b>`;
             break;
         case 'corridos':
-            instructions = `🏃 <b>Jugada CORRIDOS</b> - 🦩 ${lottery}\n\n📌 Escribe cada número con su valor específico:\n\n📖 <b>Ejemplos:</b>\n• 12 con 1 usd, 34 con 2 usd\n• 7*1.5usd, 23*2 cup\n\n⚡ Se procesará inmediatamente\n\n💭 <b>Escribe tus números:</b>`;
+            instructions = `🏃 <b>CORRIDOS</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                `Escribe UNA LÍNEA por cada número de 2 DÍGITOS.\n` +
+                `<b>Formato:</b> <code>17 con 1 usd</code>  o  <code>32*0.5usd</code>\n\n` +
+                `Ejemplo:\n17 con 1 usd\n32*0.5 usd\n62 con 10 cup\n\n` +
+                `💭 <b>Escribe tus jugadas:</b>`;
             break;
         case 'centena':
-            instructions = `💯 <b>Jugada CENTENA</b> - 🦩 ${lottery}\n\n📌 Escribe cada número con su valor específico (3 dígitos):\n\n📖 <b>Ejemplos:</b>\n• 123 con 1 usd, 456 con 2 usd\n• 001*1.5usd, 125*2 cup\n\n⚡ Se procesará inmediatamente\n\n💭 <b>Escribe tus números (3 dígitos):</b>`;
+            instructions = `💯 <b>CENTENA</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                `Escribe UNA LÍNEA por cada número de 3 DÍGITOS.\n` +
+                `<b>Formato:</b> <code>517 con 2 usd</code>  o  <code>019*1usd</code>\n\n` +
+                `Ejemplo:\n517 con 2 usd\n019*1 usd\n123 con 5 cup\n\n` +
+                `💭 <b>Escribe tus jugadas:</b>`;
             break;
         case 'parle':
-            instructions = `🔒 <b>Jugada PARLE</b> - 🦩 ${lottery}\n\n📌 Escribe cada parle con su valor específico:\n\n📖 <b>Ejemplos:</b>\n• 12x34 con 1 usd, 56x78 con 2 usd\n• 12x34*1.5usd, 56x78*2 cup\n• 12x T5 con 1 usd\n\n⚡ Se procesará inmediatamente\n\n💭 <b>Escribe tus parles (usa 'x' entre números):</b>`;
+            instructions = `🔒 <b>PARLE</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                `Escribe UNA LÍNEA por cada combinación de dos números de 2 dígitos separados por "x".\n` +
+                `<b>Formato:</b> <code>17x32 con 1 usd</code>  o  <code>17x62*2usd</code>\n\n` +
+                `Ejemplo:\n17x32 con 1 usd\n17x62*2 usd\n32x62 con 5 cup\n\n` +
+                `💭 <b>Escribe tus parles:</b>`;
             break;
     }
     await safeEdit(ctx, instructions, null);
@@ -322,7 +417,10 @@ bot.action(/type_(.+)/, async (ctx) => {
 // ========== MI DINERO ==========
 bot.action('my_money', async (ctx) => {
     const user = ctx.dbUser;
-    const text = `💰 <b>Tu saldo actual:</b>\n🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)}\n💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)}\n🎁 <b>Bono:</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD`;
+    const text = `💰 <b>Tu saldo actual:</b>\n` +
+        `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)}\n` +
+        `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)}\n` +
+        `🎁 <b>Bono:</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD`;
     await safeEdit(ctx, text, myMoneyKbd());
 });
 
@@ -345,7 +443,9 @@ bot.action('recharge', async (ctx) => {
 
     const rate = await getExchangeRate();
     await safeEdit(ctx,
-        `💵 <b>¿Cómo deseas recargar?</b>\n\nElige una opción para ver los datos de pago y luego <b>envía el monto</b> que transferiste (ej: <code>10 usd</code> o <code>500 cup</code>).\n\n<b>Tasa de cambio:</b> 1 USD = ${rate} CUP`,
+        `💵 <b>¿Cómo deseas recargar?</b>\n\n` +
+        `Elige una opción para ver los datos de pago y luego <b>envía el monto</b> que transferiste (ej: <code>10 usd</code> o <code>500 cup</code>).\n\n` +
+        `<b>Tasa de cambio:</b> 1 USD = ${rate} CUP`,
         Markup.inlineKeyboard(rows)
     );
 });
@@ -367,7 +467,10 @@ bot.action(/dep_(\d+)/, async (ctx) => {
     ctx.session.awaitingDepositAmount = true;
 
     await safeEdit(ctx,
-        `🧾 <b>${method.name}</b>\nNúmero: <code>${method.card}</code>\nConfirmar: <code>${method.confirm}</code>\n\n✅ <b>Después de transferir, envía el MONTO que transferiste</b> (ej: <code>10 usd</code> o <code>500 cup</code>).`,
+        `🧾 <b>${escapeHTML(method.name)}</b>\n` +
+        `Número: <code>${escapeHTML(method.card)}</code>\n` +
+        `Confirmar: <code>${escapeHTML(method.confirm)}</code>\n\n` +
+        `✅ <b>Después de transferir, envía el MONTO que transferiste</b> (ej: <code>10 usd</code> o <code>500 cup</code>).`,
         null
     );
 });
@@ -415,7 +518,9 @@ bot.action(/wit_(\d+)/, async (ctx) => {
     ctx.session.awaitingWithdrawAccount = true;
 
     await safeEdit(ctx,
-        `Has elegido <b>${method.name}</b>.\n\n💰 <b>Tu saldo disponible:</b> ${parseFloat(ctx.dbUser.usd).toFixed(2)} USD\nEnvía ahora el <b>número/ID de la tarjeta/cuenta</b> a la que deseas que retiremos:`,
+        `Has elegido <b>${escapeHTML(method.name)}</b>.\n\n` +
+        `💰 <b>Tu saldo disponible:</b> ${parseFloat(ctx.dbUser.usd).toFixed(2)} USD\n` +
+        `Envía ahora el <b>número/ID de la tarjeta/cuenta</b> a la que deseas que retiremos:`,
         null
     );
 });
@@ -424,7 +529,8 @@ bot.action(/wit_(\d+)/, async (ctx) => {
 bot.action('transfer', async (ctx) => {
     ctx.session.awaitingTransferTarget = true;
     await safeEdit(ctx,
-        '🔄 <b>Transferir saldo</b>\n\nEnvía el <b>ID de Telegram</b> del usuario al que deseas transferir (ej: 123456789):',
+        '🔄 <b>Transferir saldo</b>\n\n' +
+        'Envía el <b>ID de Telegram</b> del usuario al que deseas transferir (ej: 123456789):',
         null
     );
 });
@@ -448,7 +554,10 @@ bot.action('my_bets', async (ctx) => {
         let text = '📋 <b>Tus últimas 5 jugadas:</b>\n\n';
         bets.forEach((b, i) => {
             const date = new Date(b.placed_at).toLocaleString('es-CU', { timeZone: TIMEZONE });
-            text += `<b>${i + 1}.</b> 🎰 ${b.lottery} - ${b.bet_type}\n   📝 <code>${b.raw_text}</code>\n   💰 ${b.cost_usd} USD / ${b.cost_cup} CUP\n   🕒 ${date}\n\n`;
+            text += `<b>${i + 1}.</b> 🎰 ${escapeHTML(b.lottery)} - ${escapeHTML(b.bet_type)}\n` +
+                `   📝 <code>${escapeHTML(b.raw_text)}</code>\n` +
+                `   💰 ${b.cost_usd} USD / ${b.cost_cup} CUP\n` +
+                `   🕒 ${date}\n\n`;
         });
         await safeEdit(ctx, text, null);
     }
@@ -466,7 +575,17 @@ bot.action('referrals', async (ctx) => {
     const link = `https://t.me/${botInfo.username}?start=${uid}`;
 
     await safeEdit(ctx,
-        `💸 <b>¡INVITA Y GANA DINERO AUTOMÁTICO! 💰</b>\n\n🎯 <b>¿Cómo funciona?</b>\n1️⃣ Comparte tu enlace con amigos\n2️⃣ Cuando se registren y jueguen, TÚ ganas\n3️⃣ Recibes comisión CADA VEZ que apuesten\n4️⃣ ¡Dinero GRATIS para siempre! 🔄\n\n🔥 SIN LÍMITES - SIN TOPES - PARA SIEMPRE\n\n📲 <b>ESTE ES TU ENLACE MÁGICO:</b> 👇\n<code>${link}</code>\n\n📊 <b>Tus estadísticas:</b>\n👥 Total de referidos: ${count || 0}`,
+        `💸 <b>¡INVITA Y GANA DINERO AUTOMÁTICO! 💰</b>\n\n` +
+        `🎯 <b>¿Cómo funciona?</b>\n` +
+        `1️⃣ Comparte tu enlace con amigos\n` +
+        `2️⃣ Cuando se registren y jueguen, TÚ ganas\n` +
+        `3️⃣ Recibes comisión CADA VEZ que apuesten\n` +
+        `4️⃣ ¡Dinero GRATIS para siempre! 🔄\n\n` +
+        `🔥 SIN LÍMITES - SIN TOPES - PARA SIEMPRE\n\n` +
+        `📲 <b>ESTE ES TU ENLACE MÁGICO:</b> 👇\n` +
+        `<code>${escapeHTML(link)}</code>\n\n` +
+        `📊 <b>Tus estadísticas:</b>\n` +
+        `👥 Total de referidos: ${count || 0}`,
         null
     );
 });
@@ -474,7 +593,9 @@ bot.action('referrals', async (ctx) => {
 // ========== CÓMO JUGAR ==========
 bot.action('how_to_play', async (ctx) => {
     await safeEdit(ctx,
-        '📩 <b>¿Tienes dudas?</b>\nEscribe directamente en el chat del bot, tu mensaje será respondido por una persona real.\n\nℹ️ Estamos aquí para ayudarte.',
+        '📩 <b>¿Tienes dudas?</b>\n' +
+        'Escribe directamente en el chat del bot, tu mensaje será respondido por una persona real.\n\n' +
+        'ℹ️ Estamos aquí para ayudarte.',
         Markup.inlineKeyboard([[Markup.button.callback('◀ Volver', 'main')]])
     );
 });
@@ -488,7 +609,170 @@ bot.action('admin_panel', async (ctx) => {
     await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
 });
 
-// ---------- ADMIN: Añadir método DEPÓSITO ----------
+// ========== GESTIÓN DE SESIONES (ADMIN) ==========
+bot.action('admin_sessions', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    await showSessionsMenu(ctx);
+});
+
+async function showSessionsMenu(ctx) {
+    const today = new Date().toISOString().split('T')[0];
+    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+
+    const { data: sessions } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .in('date', [today, tomorrow])
+        .order('date', { ascending: true })
+        .order('time_slot', { ascending: true });
+
+    const loterias = ['Florida', 'Georgia', 'Nueva York'];
+    const turnos = ['Mañana', 'Tarde', 'Noche'];
+
+    let text = '🎰 <b>Gestión de sesiones</b>\n\n';
+    text += 'Selecciona una sesión para abrir/cerrar:\n\n';
+
+    const buttons = [];
+
+    for (const lot of loterias) {
+        text += `<b>${lot}</b>\n`;
+        const row = [];
+        for (const turno of turnos) {
+            const session = sessions?.find(s => s.lottery === lot && s.time_slot === turno);
+            const estado = session ? (session.status === 'open' ? '✅ ACTIVA' : '🔴 CERRADA') : '⚪ INACTIVA';
+            const btnText = `${turno} (${estado})`;
+            const callbackData = session
+                ? `toggle_session_${session.id}_${session.status}`
+                : `create_session_${lot}_${turno}`;
+            row.push(Markup.button.callback(btnText, callbackData));
+            text += `  • ${turno}: ${estado}\n`;
+        }
+        text += '\n';
+        buttons.push(row);
+    }
+
+    buttons.push([Markup.button.callback('◀ Volver a Admin', 'admin_panel')]);
+
+    await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
+}
+
+// Crear sesión
+bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const lottery = ctx.match[1];
+    const timeSlot = ctx.match[2];
+    const today = new Date().toISOString().split('T')[0];
+
+    let endHour, endMinute;
+    if (timeSlot === 'Mañana') { endHour = 12; endMinute = 0; }
+    else if (timeSlot === 'Tarde') { endHour = 18; endMinute = 30; }
+    else { endHour = 23; endMinute = 0; }
+
+    const endTimeStr = `${today} ${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`;
+    const endTime = new Date(endTimeStr + ' ' + TIMEZONE).toISOString();
+
+    const { data: existing } = await supabase
+        .from('lottery_sessions')
+        .select('id')
+        .eq('lottery', lottery)
+        .eq('date', today)
+        .eq('time_slot', timeSlot)
+        .maybeSingle();
+
+    if (existing) {
+        await ctx.answerCbQuery('❌ Ya existe una sesión para este turno hoy. Ciérrala primero.', { show_alert: true });
+        return;
+    }
+
+    const { data: newSession, error } = await supabase
+        .from('lottery_sessions')
+        .insert({
+            lottery,
+            date: today,
+            time_slot: timeSlot,
+            status: 'open',
+            end_time: endTime
+        })
+        .select()
+        .single();
+
+    if (error) {
+        await ctx.answerCbQuery(`❌ Error: ${error.message}`, { show_alert: true });
+        return;
+    }
+
+    // Notificar a todos los usuarios
+    const { data: users } = await supabase.from('users').select('telegram_id');
+    for (const u of users || []) {
+        try {
+            await bot.telegram.sendMessage(u.telegram_id,
+                `📢 <b>SESIÓN ABIERTA</b>\n\n` +
+                `🎰 <b>${escapeHTML(lottery)}</b> - Turno <b>${escapeHTML(timeSlot)}</b>\n` +
+                `📅 Fecha: ${today}\n` +
+                `⏰ Cierre: ${endHour}:${endMinute.toString().padStart(2, '0')} (hora Cuba)\n\n` +
+                `💬 ¡Ya puedes realizar tus apuestas!\n` +
+                `Usa el bot o la WebApp para jugar.`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {}
+    }
+
+    await ctx.answerCbQuery('✅ Sesión abierta y notificaciones enviadas.');
+    await showSessionsMenu(ctx);
+});
+
+// Cambiar estado de sesión
+bot.action(/toggle_session_(\d+)_(.+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const sessionId = parseInt(ctx.match[1]);
+    const currentStatus = ctx.match[2];
+    const newStatus = currentStatus === 'open' ? 'closed' : 'open';
+
+    const { error } = await supabase
+        .from('lottery_sessions')
+        .update({ status: newStatus, updated_at: new Date() })
+        .eq('id', sessionId);
+
+    if (error) {
+        await ctx.answerCbQuery(`❌ Error: ${error.message}`, { show_alert: true });
+        return;
+    }
+
+    const { data: session } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .single();
+
+    if (newStatus === 'closed') {
+        const { data: bets } = await supabase
+            .from('bets')
+            .select('user_id')
+            .eq('session_id', sessionId);
+
+        const notified = new Set();
+        for (const bet of bets || []) {
+            if (!notified.has(bet.user_id)) {
+                try {
+                    await bot.telegram.sendMessage(bet.user_id,
+                        `⏰ <b>SESIÓN CERRADA</b>\n\n` +
+                        `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
+                        `📅 Fecha: ${session.date}\n\n` +
+                        `El tiempo para apostar ha terminado.\n` +
+                        `Pronto se publicarán los números ganadores.`,
+                        { parse_mode: 'HTML' }
+                    );
+                } catch (e) {}
+                notified.add(bet.user_id);
+            }
+        }
+    }
+
+    await ctx.answerCbQuery(newStatus === 'open' ? '✅ Sesión abierta' : '🔴 Sesión cerrada');
+    await showSessionsMenu(ctx);
+});
+
+// ========== ADMIN: AÑADIR MÉTODO DEPÓSITO ==========
 bot.action('adm_add_dep', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     ctx.session.adminAction = 'add_dep';
@@ -497,7 +781,7 @@ bot.action('adm_add_dep', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ---------- ADMIN: Añadir método RETIRO ----------
+// ========== ADMIN: AÑADIR MÉTODO RETIRO ==========
 bot.action('adm_add_wit', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     ctx.session.adminAction = 'add_wit';
@@ -506,7 +790,7 @@ bot.action('adm_add_wit', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ---------- ADMIN: Configurar tasa ----------
+// ========== ADMIN: CONFIGURAR TASA ==========
 bot.action('adm_set_rate', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const rate = await getExchangeRate();
@@ -515,15 +799,15 @@ bot.action('adm_set_rate', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ---------- ADMIN: Configurar precios ----------
-bot.action('adm_set_price', async (ctx) => {
+// ========== ADMIN: CONFIGURAR PRECIOS Y MULTIPLICADORES ==========
+bot.action('adm_set_prices', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const { data: prices } = await supabase.from('play_prices').select('*');
     const buttons = prices.map(p => Markup.button.callback(p.bet_type, `set_price_${p.bet_type}`));
     const rows = [];
     for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
     rows.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('🎲 <b>Configurar precios de jugadas</b>\nElige el tipo que deseas modificar:',
+    await ctx.reply('🎲 <b>Configurar precios y multiplicadores</b>\nElige el tipo:',
         Markup.inlineKeyboard(rows)
     );
     await ctx.answerCbQuery();
@@ -534,11 +818,15 @@ bot.action(/set_price_(.+)/, async (ctx) => {
     const betType = ctx.match[1];
     ctx.session.adminAction = 'set_price';
     ctx.session.betType = betType;
-    await ctx.reply(`Configurando <b>${betType}</b>\nEnvía en el formato: <code>&lt;monto_cup&gt; &lt;monto_usd&gt;</code>\nEjemplo: <code>70 0.20</code>`);
+    await ctx.reply(
+        `Configurando <b>${betType}</b>\n` +
+        `Envía en el formato: <code>&lt;costo_cup&gt; &lt;costo_usd&gt; &lt;multiplicador&gt;</code>\n` +
+        `Ejemplo: <code>70 0.20 500</code>`
+    );
     await ctx.answerCbQuery();
 });
 
-// ---------- ADMIN: Ver datos actuales ----------
+// ========== ADMIN: VER DATOS ACTUALES ==========
 bot.action('adm_view', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const rate = await getExchangeRate();
@@ -547,115 +835,45 @@ bot.action('adm_view', async (ctx) => {
     const { data: prices } = await supabase.from('play_prices').select('*');
 
     let text = `💰 <b>Tasa:</b> 1 USD = ${rate} CUP\n\n📥 <b>Métodos DEPÓSITO:</b>\n`;
-    depMethods?.forEach(m => text += `  ID ${m.id}: ${m.name} - ${m.card} / ${m.confirm}\n`);
+    depMethods?.forEach(m => text += `  ID ${m.id}: ${escapeHTML(m.name)} - ${escapeHTML(m.card)} / ${escapeHTML(m.confirm)}\n`);
     text += `\n📤 <b>Métodos RETIRO:</b>\n`;
-    witMethods?.forEach(m => text += `  ID ${m.id}: ${m.name} - ${m.card} / ${m.confirm}\n`);
+    witMethods?.forEach(m => text += `  ID ${m.id}: ${escapeHTML(m.name)} - ${escapeHTML(m.card)} / ${escapeHTML(m.confirm)}\n`);
     text += `\n🎲 <b>Precios por jugada:</b>\n`;
-    prices?.forEach(p => text += `  ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD\n`);
+    prices?.forEach(p => text += `  ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD  (x${p.payout_multiplier || 0})\n`);
 
     await safeEdit(ctx, text, Markup.inlineKeyboard([[Markup.button.callback('◀ Volver a Admin', 'admin_panel')]]));
 });
 
-// ---------- ADMIN: Abrir sesión de lotería ----------
-bot.action('adm_open_session', async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
-    ctx.session.adminAction = 'open_session';
-    ctx.session.adminStep = 1;
-    await safeEdit(ctx,
-        '🎰 <b>Abrir sesión de lotería</b>\n\nSelecciona la lotería:',
-        Markup.inlineKeyboard([
-            [Markup.button.callback('🦩 Florida', 'open_lot_florida')],
-            [Markup.button.callback('🍑 Georgia', 'open_lot_georgia')],
-            [Markup.button.callback('🗽 Nueva York', 'open_lot_newyork')],
-            [Markup.button.callback('◀ Cancelar', 'admin_panel')]
-        ])
-    );
-});
-
-bot.action(/open_lot_(.+)/, async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
-    const lotteryKey = ctx.match[1];
-    const lotteryName = {
-        florida: 'Florida',
-        georgia: 'Georgia',
-        newyork: 'Nueva York'
-    }[lotteryKey];
-    ctx.session.tempLottery = lotteryName;
-    ctx.session.adminStep = 2;
-    await safeEdit(ctx,
-        `Lotería: <b>${lotteryName}</b>\nSelecciona el turno:`,
-        Markup.inlineKeyboard([
-            [Markup.button.callback('☀️ Mañana (9:00 - 12:00)', 'slot_morning')],
-            [Markup.button.callback('🌆 Tarde (14:00 - 18:30)', 'slot_afternoon')],
-            [Markup.button.callback('🌙 Noche (20:00 - 23:00)', 'slot_evening')],
-            [Markup.button.callback('◀ Volver', 'adm_open_session')]
-        ])
-    );
-});
-
-bot.action(/slot_(.+)/, async (ctx) => {
-    if (ctx.from.id !== ADMIN_ID) return;
-    const slotKey = ctx.match[1];
-    const slotNames = { morning: 'Mañana', afternoon: 'Tarde', evening: 'Noche' };
-    const timeSlot = slotNames[slotKey];
-    if (!timeSlot) return;
-
-    const lottery = ctx.session.tempLottery;
-    if (!lottery) {
-        await ctx.answerCbQuery('❌ Primero selecciona una lotería.', { show_alert: true });
-        return;
-    }
-
-    // Calcular fecha y hora de cierre
-    const now = new Date().toLocaleString('en-US', { timeZone: TIMEZONE });
-    const today = new Date(now).toISOString().split('T')[0];
-    let endHour, endMinute;
-    if (slotKey === 'morning') { endHour = 12; endMinute = 0; }
-    else if (slotKey === 'afternoon') { endHour = 18; endMinute = 30; }
-    else { endHour = 23; endMinute = 0; }
-
-    const endTimeStr = `${today} ${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`;
-    const endTime = new Date(endTimeStr + ' ' + TIMEZONE).toISOString();
-
-    const { error } = await supabase
-        .from('lottery_sessions')
-        .insert({
-            lottery,
-            date: today,
-            time_slot: timeSlot,
-            status: 'open',
-            end_time: endTime
-        });
-
-    if (error) {
-        await ctx.reply(`❌ Error al abrir sesión: ${error.message}`);
-    } else {
-        await ctx.reply(`✅ Sesión de <b>${lottery}</b> (${today} - ${timeSlot}) abierta. Se cerrará automáticamente a las ${endHour}:${endMinute.toString().padStart(2, '0')} (hora Cuba).`);
-    }
-
-    delete ctx.session.tempLottery;
-    delete ctx.session.adminAction;
-    await ctx.answerCbQuery();
-});
-
-// ---------- ADMIN: Publicar números ganadores ----------
-bot.action('adm_winning_numbers', async (ctx) => {
+// ========== ADMIN: PUBLICAR NÚMEROS GANADORES ==========
+bot.action('admin_winning', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
 
     const { data: closedSessions } = await supabase
         .from('lottery_sessions')
         .select('*')
         .eq('status', 'closed')
-        .order('date', { ascending: false })
-        .limit(10);
+        .order('date', { ascending: false });
 
-    if (!closedSessions || closedSessions.length === 0) {
-        await ctx.reply('🔢 No hay sesiones cerradas. Abre y cierra una sesión primero.');
+    const { data: published } = await supabase
+        .from('winning_numbers')
+        .select('lottery, date, time_slot');
+
+    const publishedSet = new Set(published?.map(p => `${p.lottery}|${p.date}|${p.time_slot}`) || []);
+
+    const availableSessions = closedSessions.filter(s =>
+        !publishedSet.has(`${s.lottery}|${s.date}|${s.time_slot}`)
+    );
+
+    if (availableSessions.length === 0) {
+        await ctx.reply('🔢 No hay sesiones cerradas pendientes de publicar.');
         return;
     }
 
-    const buttons = closedSessions.map(s =>
-        Markup.button.callback(`${s.lottery} - ${s.date} (${s.time_slot})`, `win_session_${s.id}`)
+    const buttons = availableSessions.map(s =>
+        Markup.button.callback(
+            `${s.lottery} - ${s.date} (${s.time_slot})`,
+            `publish_win_${s.id}`
+        )
     );
     const rows = [];
     for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
@@ -665,26 +883,174 @@ bot.action('adm_winning_numbers', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-bot.action(/win_session_(\d+)/, async (ctx) => {
+bot.action(/publish_win_(\d+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const sessionId = parseInt(ctx.match[1]);
     ctx.session.winningSessionId = sessionId;
     ctx.session.adminAction = 'winning_numbers';
-    ctx.session.adminStep = 1;
-    await ctx.reply('✍️ Envía los números ganadores separados por comas (ej: 12,34,56):');
+    await ctx.reply(
+        '✍️ <b>Ingresa el número ganador de 7 DÍGITOS</b>\n' +
+        'Formato: centena (3) + cuarteta (4). Ejemplo: <code>5173262</code> o <code>517 3262</code>\n\n' +
+        'Se desglosará automáticamente en:\n' +
+        '• Centena: primeros 3 dígitos\n' +
+        '• Fijo: últimos 2 de la centena\n' +
+        '• Corridos: fijo, primeros 2 de cuarteta, últimos 2 de cuarteta\n' +
+        '• Parles: combinaciones de los corridos'
+    );
     await ctx.answerCbQuery();
 });
+
+// ========== PROCESAR NÚMERO GANADOR Y CALCULAR PREMIOS ==========
+async function processWinningNumber(sessionId, winningStr, ctx) {
+    winningStr = winningStr.replace(/\s+/g, '');
+    if (!/^\d{7}$/.test(winningStr)) {
+        await ctx.reply('❌ El número debe tener EXACTAMENTE 7 dígitos.');
+        return false;
+    }
+
+    const { data: session } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .single();
+
+    if (!session) {
+        await ctx.reply('❌ Sesión no encontrada.');
+        return false;
+    }
+
+    // Desglose
+    const centena = winningStr.slice(0, 3);
+    const cuarteta = winningStr.slice(3);
+    const fijo = centena.slice(1);
+    const corridos = [
+        fijo,
+        cuarteta.slice(0, 2),
+        cuarteta.slice(2)
+    ];
+    const parles = [
+        `${corridos[0]}x${corridos[1]}`,
+        `${corridos[0]}x${corridos[2]}`,
+        `${corridos[1]}x${corridos[2]}`
+    ];
+
+    // Guardar números ganadores
+    const { error: insertError } = await supabase
+        .from('winning_numbers')
+        .insert({
+            lottery: session.lottery,
+            date: session.date,
+            time_slot: session.time_slot,
+            numbers: [winningStr],
+            published_at: new Date()
+        });
+
+    if (insertError) {
+        await ctx.reply(`❌ Error al guardar: ${insertError.message}`);
+        return false;
+    }
+
+    // Obtener multiplicadores
+    const { data: multipliers } = await supabase
+        .from('play_prices')
+        .select('bet_type, payout_multiplier');
+
+    const multiplierMap = {};
+    multipliers.forEach(m => { multiplierMap[m.bet_type] = parseFloat(m.payout_multiplier) || 0; });
+
+    // Obtener todas las apuestas de esta sesión
+    const { data: bets } = await supabase
+        .from('bets')
+        .select('*')
+        .eq('session_id', sessionId);
+
+    for (const bet of bets || []) {
+        let premioTotalUSD = 0;
+        let premioTotalCUP = 0;
+        const items = bet.items || [];
+
+        for (const item of items) {
+            const numero = item.numero;
+            const multiplicador = multiplierMap[bet.bet_type] || 0;
+            let ganado = false;
+
+            switch (bet.bet_type) {
+                case 'fijo':
+                    if (numero === fijo) ganado = true;
+                    break;
+                case 'corridos':
+                    if (corridos.includes(numero)) ganado = true;
+                    break;
+                case 'centena':
+                    if (numero === centena) ganado = true;
+                    break;
+                case 'parle':
+                    if (parles.includes(numero)) ganado = true;
+                    break;
+            }
+
+            if (ganado) {
+                premioTotalUSD += item.usd * multiplicador;
+                premioTotalCUP += item.cup * multiplicador;
+            }
+        }
+
+        if (premioTotalUSD > 0 || premioTotalCUP > 0) {
+            const { data: user } = await supabase
+                .from('users')
+                .select('usd, cup')
+                .eq('telegram_id', bet.user_id)
+                .single();
+
+            if (premioTotalUSD > 0) {
+                await supabase
+                    .from('users')
+                    .update({ usd: parseFloat(user.usd) + premioTotalUSD })
+                    .eq('telegram_id', bet.user_id);
+            }
+            if (premioTotalCUP > 0) {
+                await supabase
+                    .from('users')
+                    .update({ cup: parseFloat(user.cup) + premioTotalCUP })
+                    .eq('telegram_id', bet.user_id);
+            }
+
+            try {
+                await bot.telegram.sendMessage(bet.user_id,
+                    `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
+                    `🔢 Número ganador: <code>${winningStr}</code>\n` +
+                    `🎰 ${escapeHTML(session.lottery)} - ${escapeHTML(session.time_slot)}\n` +
+                    `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n\n` +
+                    `✅ El premio ya fue acreditado a tu saldo.`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
+        } else {
+            try {
+                await bot.telegram.sendMessage(bet.user_id,
+                    `🔢 <b>Números ganadores de ${escapeHTML(session.lottery)} (${session.date} - ${escapeHTML(session.time_slot)})</b>\n\n` +
+                    `Número: <code>${winningStr}</code>\n\n` +
+                    `😔 No has ganado esta vez. ¡Sigue intentando!`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
+        }
+    }
+
+    await ctx.reply(`✅ Números ganadores publicados y premios calculados.`);
+    return true;
+}
 
 // ========== MANEJADOR DE MENSAJES DE TEXTO ==========
 bot.on(message('text'), async (ctx) => {
     const uid = ctx.from.id;
     const text = ctx.message.text.trim();
     const session = ctx.session;
+    const user = ctx.dbUser;
 
     // ---------- FLUJOS ADMIN ----------
     if (uid === ADMIN_ID && session.adminAction) {
-
-        // ----- Añadir depósito -----
+        // Añadir depósito
         if (session.adminAction === 'add_dep') {
             if (session.adminStep === 1) {
                 session.adminTempName = text;
@@ -703,13 +1069,13 @@ bot.on(message('text'), async (ctx) => {
                     .select()
                     .single();
                 if (error) await ctx.reply(`❌ Error: ${error.message}`);
-                else await ctx.reply(`✅ Método de depósito <b>${session.adminTempName}</b> añadido con ID ${data.id}.`);
+                else await ctx.reply(`✅ Método de depósito <b>${escapeHTML(session.adminTempName)}</b> añadido con ID ${data.id}.`);
                 delete session.adminAction;
                 return;
             }
         }
 
-        // ----- Añadir retiro -----
+        // Añadir retiro
         if (session.adminAction === 'add_wit') {
             if (session.adminStep === 1) {
                 session.adminTempName = text;
@@ -728,13 +1094,13 @@ bot.on(message('text'), async (ctx) => {
                     .select()
                     .single();
                 if (error) await ctx.reply(`❌ Error: ${error.message}`);
-                else await ctx.reply(`✅ Método de retiro <b>${session.adminTempName}</b> añadido con ID ${data.id}.`);
+                else await ctx.reply(`✅ Método de retiro <b>${escapeHTML(session.adminTempName)}</b> añadido con ID ${data.id}.`);
                 delete session.adminAction;
                 return;
             }
         }
 
-        // ----- Configurar tasa -----
+        // Configurar tasa
         if (session.adminAction === 'set_rate') {
             const rate = parseFloat(text.replace(',', '.'));
             if (isNaN(rate) || rate <= 0) {
@@ -747,56 +1113,38 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // ----- Configurar precio -----
+        // Configurar precio y multiplicador
         if (session.adminAction === 'set_price') {
             const parts = text.split(' ');
-            if (parts.length < 2) {
-                await ctx.reply('❌ Formato inválido. Usa: <code>&lt;cup&gt; &lt;usd&gt;</code> (ej: 70 0.20)');
+            if (parts.length < 3) {
+                await ctx.reply('❌ Formato inválido. Usa: <code>&lt;cup&gt; &lt;usd&gt; &lt;multiplier&gt;</code>');
                 return;
             }
             const cup = parseFloat(parts[0].replace(',', '.'));
             const usd = parseFloat(parts[1].replace(',', '.'));
-            if (isNaN(cup) || isNaN(usd) || cup < 0 || usd < 0) {
-                await ctx.reply('❌ Montos inválidos.');
+            const multiplier = parseFloat(parts[2].replace(',', '.'));
+            if (isNaN(cup) || isNaN(usd) || isNaN(multiplier) || cup < 0 || usd < 0 || multiplier < 0) {
+                await ctx.reply('❌ Montos o multiplicador inválidos.');
                 return;
             }
             await supabase
                 .from('play_prices')
-                .update({ amount_cup: cup, amount_usd: usd, updated_at: new Date() })
+                .update({ amount_cup: cup, amount_usd: usd, payout_multiplier: multiplier, updated_at: new Date() })
                 .eq('bet_type', session.betType);
-            await ctx.reply(`✅ Precio para <b>${session.betType}</b> actualizado: ${cup} CUP / ${usd} USD`);
+            await ctx.reply(`✅ Precio para <b>${session.betType}</b> actualizado: ${cup} CUP / ${usd} USD  (x${multiplier})`);
             delete session.adminAction;
             delete session.betType;
             return;
         }
 
-        // ----- Publicar números ganadores -----
+        // Publicar números ganadores
         if (session.adminAction === 'winning_numbers') {
             const sessionId = session.winningSessionId;
-            const numbers = text.split(',').map(n => n.trim()).filter(n => n);
-            const { data: ses } = await supabase.from('lottery_sessions').select('*').eq('id', sessionId).single();
-            if (!ses) {
-                await ctx.reply('❌ Sesión no encontrada.');
+            const success = await processWinningNumber(sessionId, text, ctx);
+            if (success) {
                 delete session.adminAction;
-                return;
+                delete session.winningSessionId;
             }
-            const { error } = await supabase
-                .from('winning_numbers')
-                .insert({
-                    lottery: ses.lottery,
-                    date: ses.date,
-                    time_slot: ses.time_slot,
-                    numbers,
-                    published_at: new Date()
-                });
-            if (error) {
-                await ctx.reply(`❌ Error al publicar: ${error.message}`);
-            } else {
-                await ctx.reply(`✅ Números ganadores de ${ses.lottery} (${ses.date} - ${ses.time_slot}) publicados.`);
-                await notifyUsersOfWinningNumbers(ses, numbers);
-            }
-            delete session.adminAction;
-            delete session.winningSessionId;
             return;
         }
     }
@@ -811,7 +1159,6 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        const user = ctx.dbUser;
         const method = session.depositMethod;
         let amountUSD = 0, amountCUP = 0;
 
@@ -851,7 +1198,7 @@ bot.on(message('text'), async (ctx) => {
     // ----- Retiro: cuenta -----
     if (session.awaitingWithdrawAccount) {
         const account = text;
-        const amount = parseFloat(ctx.dbUser.usd);
+        const amount = parseFloat(user.usd);
         if (amount < 1) {
             await ctx.reply('❌ No tienes saldo USD suficiente para retirar.');
             delete session.awaitingWithdrawAccount;
@@ -876,7 +1223,12 @@ bot.on(message('text'), async (ctx) => {
             await ctx.reply(`❌ Error al crear la solicitud: ${error.message}`);
         } else {
             await ctx.telegram.sendMessage(ADMIN_CHANNEL,
-                `📤 <b>Nueva solicitud de RETIRO</b>\n👤 Usuario: ${ctx.from.first_name} (${uid})\n💰 Monto: ${amount} USD\n🏦 Método: ${method.name}\n📞 Cuenta: ${account}\n🆔 Solicitud: ${request.id}`,
+                `📤 <b>Nueva solicitud de RETIRO</b>\n` +
+                `👤 Usuario: ${ctx.from.first_name} (${uid})\n` +
+                `💰 Monto: ${amount} USD\n` +
+                `🏦 Método: ${escapeHTML(method.name)}\n` +
+                `📞 Cuenta: ${escapeHTML(account)}\n` +
+                `🆔 Solicitud: ${request.id}`,
                 {
                     parse_mode: 'HTML',
                     reply_markup: Markup.inlineKeyboard([
@@ -919,7 +1271,7 @@ bot.on(message('text'), async (ctx) => {
         session.transferTarget = targetId;
         session.awaitingTransferAmount = true;
         delete session.awaitingTransferTarget;
-        await ctx.reply(`Ahora envía el <b>monto en USD</b> a transferir:\n💰 Tu saldo: ${parseFloat(ctx.dbUser.usd).toFixed(2)} USD`);
+        await ctx.reply(`Ahora envía el <b>monto en USD</b> a transferir:\n💰 Tu saldo: ${parseFloat(user.usd).toFixed(2)} USD`);
         return;
     }
 
@@ -930,7 +1282,7 @@ bot.on(message('text'), async (ctx) => {
             await ctx.reply('❌ Monto inválido.');
             return;
         }
-        if (parseFloat(ctx.dbUser.usd) < amount) {
+        if (parseFloat(user.usd) < amount) {
             await ctx.reply('❌ Saldo insuficiente.');
             return;
         }
@@ -938,7 +1290,7 @@ bot.on(message('text'), async (ctx) => {
         const targetId = session.transferTarget;
         await supabase
             .from('users')
-            .update({ usd: parseFloat(ctx.dbUser.usd) - amount, updated_at: new Date() })
+            .update({ usd: parseFloat(user.usd) - amount, updated_at: new Date() })
             .eq('telegram_id', uid);
 
         const { data: targetUser } = await supabase
@@ -958,71 +1310,122 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // ----- Apuestas -----
+    // ----- APUESTA -----
     if (session.awaitingBet) {
         const betType = session.betType;
-        const lottery = session.lottery || 'Florida';
-        const { ok, usdCost, cupCost } = await parseBetCost(text, betType);
+        const lottery = session.lottery;
+        const sessionId = session.sessionId;
 
-        if (!ok) {
-            await ctx.reply('❌ Formato de jugada no reconocido.');
+        if (!sessionId) {
+            await ctx.reply('❌ No se ha seleccionado una sesión activa. Comienza de nuevo.');
+            delete session.awaitingBet;
             return;
         }
 
-        const user = ctx.dbUser;
+        // Verificar que la sesión sigue activa
+        const { data: activeSession } = await supabase
+            .from('lottery_sessions')
+            .select('*')
+            .eq('id', sessionId)
+            .eq('status', 'open')
+            .maybeSingle();
+
+        if (!activeSession) {
+            await ctx.reply('❌ La sesión de juego ha sido cerrada. No se pueden registrar apuestas.');
+            delete session.awaitingBet;
+            return;
+        }
+
+        const parsed = parseBetMessage(text, betType);
+        if (!parsed.ok) {
+            await ctx.reply('❌ No se pudo interpretar tu apuesta. Verifica el formato y vuelve a intentarlo.');
+            return;
+        }
+
+        const totalUSD = parsed.totalUSD;
+        const totalCUP = parsed.totalCUP;
+
+        if (totalUSD === 0 && totalCUP === 0) {
+            await ctx.reply('❌ Debes especificar un monto válido (USD o CUP).');
+            return;
+        }
+
         let newUsd = parseFloat(user.usd);
         let newBonus = parseFloat(user.bonus_usd);
         let newCup = parseFloat(user.cup);
 
-        if (usdCost > 0) {
-            const totalUSD = newUsd + newBonus;
-            if (totalUSD < usdCost) {
-                await ctx.reply('❌ Saldo USD insuficiente (incluyendo bono).');
+        if (totalUSD > 0) {
+            const totalDisponible = newUsd + newBonus;
+            if (totalDisponible < totalUSD) {
+                await ctx.reply('❌ Saldo USD (incluyendo bono) insuficiente.');
                 return;
             }
-            const useBonus = Math.min(newBonus, usdCost);
-            newBonus -= useBonus;
-            newUsd -= (usdCost - useBonus);
-        } else if (cupCost > 0) {
-            if (newCup < cupCost) {
+            const usarBono = Math.min(newBonus, totalUSD);
+            newBonus -= usarBono;
+            newUsd -= (totalUSD - usarBono);
+        }
+
+        if (totalCUP > 0) {
+            if (newCup < totalCUP) {
                 await ctx.reply('❌ Saldo CUP insuficiente.');
                 return;
             }
-            newCup -= cupCost;
+            newCup -= totalCUP;
         }
 
         await supabase
             .from('users')
-            .update({ usd: newUsd, bonus_usd: newBonus, cup: newCup, updated_at: new Date() })
+            .update({
+                usd: newUsd,
+                bonus_usd: newBonus,
+                cup: newCup,
+                updated_at: new Date()
+            })
             .eq('telegram_id', uid);
 
-        await supabase.from('bets').insert({
-            user_id: uid,
-            lottery,
-            bet_type: betType,
-            raw_text: text,
-            cost_usd: usdCost,
-            cost_cup: cupCost,
-            placed_at: new Date()
-        });
+        const { data: bet, error } = await supabase
+            .from('bets')
+            .insert({
+                user_id: uid,
+                lottery,
+                session_id: sessionId,
+                bet_type: betType,
+                raw_text: text,
+                items: parsed.items,
+                cost_usd: totalUSD,
+                cost_cup: totalCUP,
+                placed_at: new Date()
+            })
+            .select()
+            .single();
+
+        if (error) {
+            console.error('Error insertando apuesta:', error);
+            await ctx.reply('❌ Error al registrar la apuesta. Intenta más tarde.');
+            return;
+        }
 
         await ctx.replyWithHTML(
-            `✅ <b>Jugada registrada</b>\n🎰 ${lottery} - ${betType}\n📝 <code>${text}</code>\n💰 Costo: ${usdCost.toFixed(2)} USD / ${cupCost.toFixed(2)} CUP\n🍀 ¡Buena suerte!`
+            `✅ <b>Jugada registrada</b>\n🎰 ${escapeHTML(lottery)} - ${escapeHTML(betType)}\n` +
+            `📝 <code>${escapeHTML(text)}</code>\n` +
+            `💰 Costo total: ${totalUSD.toFixed(2)} USD / ${totalCUP.toFixed(2)} CUP\n` +
+            `🍀 ¡Buena suerte!`
         );
 
         delete session.awaitingBet;
         delete session.betType;
         delete session.lottery;
+        delete session.sessionId;
         return;
     }
 
-    // Si nada coincide, sugerir menú
+    // Si nada coincide
     await ctx.reply('No entendí ese mensaje. Por favor usa los botones del menú.',
         Markup.inlineKeyboard([[Markup.button.callback('📋 Menú principal', 'main')]])
     );
 });
 
-// ========== APROBACIÓN/RECHAZO DE RETIROS (desde canal) ==========
+// ========== APROBACIÓN/RECHAZO DE RETIROS ==========
 bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) {
         await ctx.answerCbQuery('No autorizado', { show_alert: true });
@@ -1068,6 +1471,7 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
 
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
     await ctx.reply('✅ Retiro aprobado y saldo debitado.');
+    await ctx.answerCbQuery();
 });
 
 bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
@@ -1083,86 +1487,54 @@ bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
     }
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
     await ctx.reply('❌ Retiro rechazado.');
+    await ctx.answerCbQuery();
 });
 
-// ========== CIERRE AUTOMÁTICO DE SESIONES DE LOTERÍA ==========
+// ========== CIERRE AUTOMÁTICO DE SESIONES ==========
 async function closeExpiredSessions() {
     try {
         const now = new Date().toISOString();
-        const { data: expiredSessions, error } = await supabase
+        const { data: expiredSessions } = await supabase
             .from('lottery_sessions')
             .select('*')
             .eq('status', 'open')
             .lt('end_time', now);
 
-        if (error) {
-            console.error('Error al obtener sesiones expiradas:', error);
-            return;
-        }
-
-        if (!expiredSessions || expiredSessions.length === 0) return;
-
-        for (const session of expiredSessions) {
+        for (const session of expiredSessions || []) {
             await supabase
                 .from('lottery_sessions')
                 .update({ status: 'closed', updated_at: new Date() })
                 .eq('id', session.id);
 
-            // Notificar a usuarios que apostaron en esta sesión
             const { data: bets } = await supabase
                 .from('bets')
                 .select('user_id')
-                .eq('lottery', session.lottery)
-                .gte('placed_at', `${session.date}T00:00:00`)
-                .lte('placed_at', `${session.date}T23:59:59`);
+                .eq('session_id', session.id);
 
             const notified = new Set();
             for (const bet of bets || []) {
                 if (!notified.has(bet.user_id)) {
-                    await bot.telegram.sendMessage(bet.user_id,
-                        `⏰ <b>Sesión de ${session.lottery} (${session.date} - ${session.time_slot}) cerrada</b>\n\nEl tiempo para apostar ha terminado. Pronto se publicarán los números ganadores y los resultados.`,
-                        { parse_mode: 'HTML' }
-                    );
+                    try {
+                        await bot.telegram.sendMessage(bet.user_id,
+                            `⏰ <b>SESIÓN CERRADA AUTOMÁTICAMENTE</b>\n\n` +
+                            `🎰 ${escapeHTML(session.lottery)} - ${escapeHTML(session.time_slot)}\n` +
+                            `📅 ${session.date}\n\n` +
+                            `El tiempo ha finalizado. Pronto se publicarán los resultados.`,
+                            { parse_mode: 'HTML' }
+                        );
+                    } catch (e) {}
                     notified.add(bet.user_id);
                 }
             }
-            console.log(`Sesión ${session.id} cerrada automáticamente.`);
         }
     } catch (e) {
-        console.error('Error en closeExpiredSessions:', e);
+        console.error('Error cerrando sesiones:', e);
     }
 }
 
-async function notifyUsersOfWinningNumbers(session, numbers) {
-    try {
-        const { data: bets } = await supabase
-            .from('bets')
-            .select('user_id')
-            .eq('lottery', session.lottery)
-            .gte('placed_at', `${session.date}T00:00:00`)
-            .lte('placed_at', `${session.date}T23:59:59`);
-
-        const notified = new Set();
-        for (const bet of bets || []) {
-            if (!notified.has(bet.user_id)) {
-                await bot.telegram.sendMessage(bet.user_id,
-                    `🔢 <b>Números ganadores de ${session.lottery} (${session.date} - ${session.time_slot})</b>\n\n${numbers.join(', ')}\n\nRevisa tus jugadas. ¡Pronto se acreditarán los premios!`,
-                    { parse_mode: 'HTML' }
-                );
-                notified.add(bet.user_id);
-            }
-        }
-    } catch (e) {
-        console.error('Error notifying winning numbers:', e);
-    }
-}
-
-// Programar tarea cada minuto
 cron.schedule('* * * * *', () => {
     closeExpiredSessions();
-}, {
-    timezone: TIMEZONE
-});
+}, { timezone: TIMEZONE });
 
 // ========== EXPORTAR BOT ==========
 module.exports = bot;
