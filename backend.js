@@ -1,6 +1,6 @@
 // ==============================
 // backend.js - API REST + Bot de Telegram (UNIFICADO)
-// Versión FINAL con notificaciones globales y visibilidad de ganadores
+// Versión FINAL con soporte para D/T, broadcasts y gestión completa
 // ==============================
 
 require('dotenv').config();
@@ -45,9 +45,6 @@ const upload = multer({
 
 // ========== FUNCIONES AUXILIARES ==========
 
-/**
- * Verifica la firma de Telegram WebApp.
- */
 function verifyTelegramWebAppData(initData, botToken) {
     const encoded = decodeURIComponent(initData);
     const arr = encoded.split('&');
@@ -60,9 +57,6 @@ function verifyTelegramWebAppData(initData, botToken) {
     return computedHash === hash;
 }
 
-/**
- * Obtiene o crea un usuario en Supabase.
- */
 async function getOrCreateUser(telegramId, firstName = 'Jugador') {
     let { data: user } = await supabase
         .from('users')
@@ -81,9 +75,6 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador') {
     return user;
 }
 
-/**
- * Obtiene la tasa de cambio actual.
- */
 async function getExchangeRate() {
     const { data } = await supabase
         .from('exchange_rate')
@@ -93,9 +84,7 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
-/**
- * Parsea una línea de apuesta (mismo algoritmo que en bot.js)
- */
+// ========== PARSEO DE APUESTAS CON SOPORTE PARA D Y T ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return null;
@@ -108,10 +97,26 @@ function parseBetLine(line, betType) {
     montoStr = match[2];
     if (match[3]) moneda = match[3];
 
-    if (betType === 'fijo' || betType === 'corridos') {
-        if (!/^\d{2}$/.test(numero) && !/^[DdTt]\d$/.test(numero)) return null;
-        if (/^[Dd](\d)$/.test(numero)) numero = '0' + numero.slice(1);
-        if (/^[Tt](\d)$/.test(numero)) numero = numero.slice(1) + '0';
+    const montoBase = parseFloat(montoStr);
+    if (isNaN(montoBase) || montoBase <= 0) return null;
+
+    let montoReal = montoBase;
+    let numeroGuardado = numero;
+
+    if (betType === 'fijo') {
+        if (/^\d{2}$/.test(numero)) {
+            // normal
+        } else if (/^[Dd](\d)$/.test(numero)) {
+            montoReal = montoBase * 10;
+            numeroGuardado = numero.toUpperCase();
+        } else if (/^[Tt](\d)$/.test(numero)) {
+            montoReal = montoBase * 10;
+            numeroGuardado = numero.toUpperCase();
+        } else {
+            return null;
+        }
+    } else if (betType === 'corridos') {
+        if (!/^\d{2}$/.test(numero)) return null;
     } else if (betType === 'centena') {
         if (!/^\d{3}$/.test(numero)) return null;
     } else if (betType === 'parle') {
@@ -120,19 +125,13 @@ function parseBetLine(line, betType) {
         return null;
     }
 
-    const monto = parseFloat(montoStr);
-    if (isNaN(monto) || monto <= 0) return null;
-
     return {
-        numero,
-        usd: moneda === 'usd' ? monto : 0,
-        cup: moneda === 'cup' ? monto : 0
+        numero: numeroGuardado,
+        usd: moneda === 'usd' ? montoReal : 0,
+        cup: moneda === 'cup' ? montoReal : 0
     };
 }
 
-/**
- * Parsea el mensaje completo de apuesta (varias líneas)
- */
 function parseBetMessage(text, betType) {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
     const items = [];
@@ -155,20 +154,33 @@ function parseBetMessage(text, betType) {
     };
 }
 
-/**
- * Genera fecha de cierre de sesión según turno (Día/Noche)
- */
 function getEndTimeFromSlot(timeSlot) {
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     let hour, minute;
     if (timeSlot === 'Día') {
         hour = 12;
         minute = 0;
-    } else { // Noche
+    } else {
         hour = 23;
         minute = 0;
     }
     return moment.tz(`${today} ${hour}:${minute}:00`, TIMEZONE).toDate();
+}
+
+// ========== FUNCIÓN DE BROADCAST GLOBAL ==========
+async function broadcastToAllUsers(message, parseMode = 'HTML') {
+    const { data: users } = await supabase
+        .from('users')
+        .select('telegram_id');
+
+    for (const u of users || []) {
+        try {
+            await bot.telegram.sendMessage(u.telegram_id, message, { parse_mode: parseMode });
+            await new Promise(resolve => setTimeout(resolve, 30)); // evitar flood
+        } catch (e) {
+            console.warn(`Error enviando broadcast a ${u.telegram_id}:`, e.message);
+        }
+    }
 }
 
 // ========== MIDDLEWARE DE ADMIN ==========
@@ -312,7 +324,6 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         return res.status(500).json({ error: 'Error al guardar solicitud' });
     }
 
-    // Notificar al canal de admin
     try {
         const method = await supabase.from('deposit_methods').select('name').eq('id', methodId).single();
         const methodName = method.data?.name || 'Desconocido';
@@ -362,7 +373,6 @@ app.post('/api/withdraw-requests', async (req, res) => {
         return res.status(500).json({ error: 'Error al crear solicitud' });
     }
 
-    // Descontar saldo inmediatamente (política de la plataforma)
     await supabase
         .from('users')
         .update({ usd: parseFloat(user.usd) - amount, updated_at: new Date() })
@@ -428,7 +438,6 @@ app.post('/api/bets', async (req, res) => {
         return res.status(400).json({ error: 'Faltan datos' });
     }
 
-    // Verificar sesión activa
     if (sessionId) {
         const { data: activeSession } = await supabase
             .from('lottery_sessions')
@@ -453,7 +462,6 @@ app.post('/api/bets', async (req, res) => {
         return res.status(400).json({ error: 'Debes especificar un monto válido (USD o CUP)' });
     }
 
-    // Verificar y descontar saldo
     let newUsd = parseFloat(user.usd);
     let newBonus = parseFloat(user.bonus_usd);
     let newCup = parseFloat(user.cup);
@@ -485,7 +493,6 @@ app.post('/api/bets', async (req, res) => {
         })
         .eq('telegram_id', userId);
 
-    // Insertar apuesta
     const { data: bet, error: betError } = await supabase
         .from('bets')
         .insert({
@@ -615,7 +622,7 @@ app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     res.json(data || []);
 });
 
-// --- Crear nueva sesión (abrir) ---
+// --- Crear nueva sesión (abrir) con broadcast ---
 app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { lottery, time_slot } = req.body;
     if (!lottery || !time_slot) {
@@ -628,7 +635,6 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     const endTime = getEndTimeFromSlot(time_slot);
 
-    // Verificar si ya existe
     const { data: existing } = await supabase
         .from('lottery_sessions')
         .select('id')
@@ -654,10 +660,20 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
         .single();
 
     if (error) return res.status(500).json({ error: error.message });
+
+    // Broadcast global
+    await broadcastToAllUsers(
+        `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
+        `✨ La región <b>${lottery}</b> acaba de abrir su turno de <b>${time_slot}</b>.\n` +
+        `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
+        `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
+        `🍀 ¡La suerte te espera!`
+    );
+
     res.json(data);
 });
 
-// --- Cambiar estado de una sesión (abrir/cerrar) ---
+// --- Cambiar estado de una sesión (abrir/cerrar) con broadcast ---
 app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) => {
     const { sessionId, status } = req.body;
     if (!sessionId || !status) {
@@ -675,6 +691,18 @@ app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) =>
         .single();
 
     if (error) return res.status(500).json({ error: error.message });
+
+    if (status === 'closed') {
+        // Broadcast de cierre
+        await broadcastToAllUsers(
+            `🔴 <b>SESIÓN CERRADA</b>\n\n` +
+            `🎰 <b>${data.lottery}</b> - Turno <b>${data.time_slot}</b>\n` +
+            `📅 Fecha: ${data.date}\n\n` +
+            `❌ Ya no se reciben más apuestas.\n` +
+            `🔢 Pronto anunciaremos el número ganador. ¡Muy atento!`
+        );
+    }
+
     res.json(data);
 });
 
@@ -688,11 +716,10 @@ app.post('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) =>
     res.json(data || []);
 });
 
-// --- NUEVO ENDPOINT: Obtener ganadores de una sesión (para WebApp) ---
+// --- Obtener ganadores de una sesión (con soporte D/T) ---
 app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (req, res) => {
     const { sessionId } = req.params;
 
-    // 1. Obtener sesión
     const { data: session } = await supabase
         .from('lottery_sessions')
         .select('*')
@@ -703,7 +730,6 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
         return res.status(404).json({ error: 'Sesión no encontrada' });
     }
 
-    // 2. Obtener número ganador publicado
     const { data: winning } = await supabase
         .from('winning_numbers')
         .select('numbers')
@@ -716,7 +742,7 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
         return res.json({ winners: [], message: 'Esta sesión aún no tiene número ganador publicado' });
     }
 
-    const winningStr = winning.numbers[0]; // asumimos 1 número
+    const winningStr = winning.numbers[0];
     const centena = winningStr.slice(0, 3);
     const cuarteta = winningStr.slice(3);
     const fijo = centena.slice(1);
@@ -731,14 +757,12 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
         `${corridos[1]}x${corridos[2]}`
     ];
 
-    // 3. Obtener multiplicadores
     const { data: multipliers } = await supabase
         .from('play_prices')
         .select('bet_type, payout_multiplier');
     const multiplierMap = {};
     multipliers.forEach(m => { multiplierMap[m.bet_type] = parseFloat(m.payout_multiplier) || 0; });
 
-    // 4. Obtener todas las apuestas de la sesión
     const { data: bets } = await supabase
         .from('bets')
         .select('*')
@@ -758,7 +782,15 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
 
             switch (bet.bet_type) {
                 case 'fijo':
-                    if (numero === fijo) ganado = true;
+                    if (numero.startsWith('D')) {
+                        const digito = numero[1];
+                        if (fijo.startsWith(digito)) ganado = true;
+                    } else if (numero.startsWith('T')) {
+                        const digito = numero[1];
+                        if (fijo.endsWith(digito)) ganado = true;
+                    } else {
+                        if (numero === fijo) ganado = true;
+                    }
                     break;
                 case 'corridos':
                     if (corridos.includes(numero)) ganado = true;
@@ -778,7 +810,6 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
         }
 
         if (premioTotalUSD > 0 || premioTotalCUP > 0) {
-            // Obtener nombre del usuario
             const { data: user } = await supabase
                 .from('users')
                 .select('first_name')
@@ -798,7 +829,7 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
     res.json({ winners, winning_number: winningStr });
 });
 
-// --- Publicar número ganador (con notificaciones) ---
+// --- Publicar número ganador (con soporte D/T y broadcast) ---
 app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
     const { sessionId, winningNumber } = req.body;
     if (!sessionId || !winningNumber) {
@@ -820,7 +851,6 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         return res.status(404).json({ error: 'Sesión no encontrada' });
     }
 
-    // Verificar que no se haya publicado ya
     const { data: existingWin } = await supabase
         .from('winning_numbers')
         .select('id')
@@ -833,7 +863,6 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         return res.status(400).json({ error: 'Esta sesión ya tiene un número ganador publicado' });
     }
 
-    // Desglose
     const centena = cleanNumber.slice(0, 3);
     const cuarteta = cleanNumber.slice(3);
     const fijo = centena.slice(1);
@@ -848,7 +877,6 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         `${corridos[1]}x${corridos[2]}`
     ];
 
-    // Guardar número ganador
     const { error: insertError } = await supabase
         .from('winning_numbers')
         .insert({
@@ -863,20 +891,17 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         return res.status(500).json({ error: insertError.message });
     }
 
-    // Obtener multiplicadores
     const { data: multipliers } = await supabase
         .from('play_prices')
         .select('bet_type, payout_multiplier');
     const multiplierMap = {};
     multipliers.forEach(m => { multiplierMap[m.bet_type] = parseFloat(m.payout_multiplier) || 0; });
 
-    // Obtener todas las apuestas de la sesión
     const { data: bets } = await supabase
         .from('bets')
         .select('*')
         .eq('session_id', sessionId);
 
-    // Procesar cada apuesta
     for (const bet of bets || []) {
         let premioTotalUSD = 0;
         let premioTotalCUP = 0;
@@ -889,7 +914,15 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
 
             switch (bet.bet_type) {
                 case 'fijo':
-                    if (numero === fijo) ganado = true;
+                    if (numero.startsWith('D')) {
+                        const digito = numero[1];
+                        if (fijo.startsWith(digito)) ganado = true;
+                    } else if (numero.startsWith('T')) {
+                        const digito = numero[1];
+                        if (fijo.endsWith(digito)) ganado = true;
+                    } else {
+                        if (numero === fijo) ganado = true;
+                    }
                     break;
                 case 'corridos':
                     if (corridos.includes(numero)) ganado = true;
@@ -928,56 +961,36 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
                     .eq('telegram_id', bet.user_id);
             }
 
-            // Notificar al ganador
             try {
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: bet.user_id,
-                    text: `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
-                          `🔢 Número ganador: <code>${cleanNumber}</code>\n` +
-                          `🎰 ${session.lottery} - ${session.time_slot}\n` +
-                          `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n\n` +
-                          `✅ El premio ya fue acreditado a tu saldo.`,
-                    parse_mode: 'HTML'
-                });
+                await bot.telegram.sendMessage(bet.user_id,
+                    `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
+                    `🔢 Número ganador: <code>${cleanNumber}</code>\n` +
+                    `🎰 ${session.lottery} - ${session.time_slot}\n` +
+                    `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n\n` +
+                    `✅ El premio ya fue acreditado a tu saldo.`,
+                    { parse_mode: 'HTML' }
+                );
             } catch (e) {}
         } else {
-            // Notificar que no ganó
             try {
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: bet.user_id,
-                    text: `🔢 <b>Números ganadores de ${session.lottery} (${session.date} - ${session.time_slot})</b>\n\n` +
-                          `Número: <code>${cleanNumber}</code>\n\n` +
-                          `😔 No has ganado esta vez. ¡Sigue intentando!`,
-                    parse_mode: 'HTML'
-                });
+                await bot.telegram.sendMessage(bet.user_id,
+                    `🔢 <b>Números ganadores de ${session.lottery} (${session.date} - ${session.time_slot})</b>\n\n` +
+                    `Número: <code>${cleanNumber}</code>\n\n` +
+                    `😔 No has ganado esta vez. ¡Sigue intentando!`,
+                    { parse_mode: 'HTML' }
+                );
             } catch (e) {}
         }
     }
 
-    // --- NUEVO: Broadcast global a TODOS los usuarios ---
-    try {
-        const { data: allUsers } = await supabase
-            .from('users')
-            .select('telegram_id');
-
-        const announceText = `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
-            `🎰 <b>${session.lottery}</b> - Turno <b>${session.time_slot}</b>\n` +
-            `📅 Fecha: ${session.date}\n` +
-            `🔢 Número: <code>${cleanNumber}</code>\n\n` +
-            `💬 Revisa tu historial para ver si has ganado. ¡Suerte en la próxima!`;
-
-        for (const u of allUsers || []) {
-            try {
-                await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-                    chat_id: u.telegram_id,
-                    text: announceText,
-                    parse_mode: 'HTML'
-                });
-            } catch (e) {}
-        }
-    } catch (e) {
-        console.error('Error en broadcast global:', e);
-    }
+    // Broadcast global
+    await broadcastToAllUsers(
+        `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
+        `🎰 <b>${session.lottery}</b> - Turno <b>${session.time_slot}</b>\n` +
+        `📅 Fecha: ${session.date}\n` +
+        `🔢 Número: <code>${cleanNumber}</code>\n\n` +
+        `💬 Revisa tu historial para ver si has ganado. ¡Suerte en la próxima!`
+    );
 
     res.json({ success: true, message: 'Números publicados y premios calculados' });
 });
