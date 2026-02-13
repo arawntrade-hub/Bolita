@@ -1,6 +1,6 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión final con soporte para D/T, depósitos con captura, y menú persistente
+// Versión con teclado inline en filas de 2, formato múltiple de números, y soporte D/T
 // ==============================
 
 require('dotenv').config();
@@ -105,52 +105,63 @@ function parseAmount(text) {
     return { usd, cup };
 }
 
-// ========== PARSEO DE APUESTAS CON SOPORTE PARA D Y T ==========
+// ========== PARSEO DE APUESTAS (SOPORTE MÚLTIPLES NÚMEROS) ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
-    if (!line) return null;
+    if (!line) return [];
 
-    let numero, montoStr, moneda = 'usd';
-    const match = line.match(/^([\dx]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/);
-    if (!match) return null;
+    // Buscar el patrón: números separados por espacios o comas, luego "con" o "*", luego monto y moneda
+    // Ej: "09 10 34 con 50 cup" o "12,15*2usd"
+    const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/);
+    if (!match) return [];
 
-    numero = match[1].trim();
-    montoStr = match[2];
-    if (match[3]) moneda = match[3];
+    let numerosStr = match[1].trim();
+    const montoStr = match[2];
+    const moneda = match[3] || 'usd';
+
+    // Separar números por espacios o comas
+    const numeros = numerosStr.split(/[\s,]+/).filter(n => n.length > 0);
 
     const montoBase = parseFloat(montoStr);
-    if (isNaN(montoBase) || montoBase <= 0) return null;
+    if (isNaN(montoBase) || montoBase <= 0) return [];
 
-    let montoReal = montoBase;
-    let numeroGuardado = numero;
+    const resultados = [];
 
-    if (betType === 'fijo') {
-        if (/^\d{2}$/.test(numero)) {
-            // normal
-        } else if (/^[Dd](\d)$/.test(numero)) {
-            montoReal = montoBase * 10;
-            numeroGuardado = numero.toUpperCase();
-        } else if (/^[Tt](\d)$/.test(numero)) {
-            montoReal = montoBase * 10;
-            numeroGuardado = numero.toUpperCase();
+    for (let numero of numeros) {
+        // Validar según el tipo de jugada
+        let montoReal = montoBase;
+        let numeroGuardado = numero;
+
+        if (betType === 'fijo') {
+            if (/^\d{2}$/.test(numero)) {
+                // normal
+            } else if (/^[Dd](\d)$/.test(numero)) {
+                montoReal = montoBase * 10;
+                numeroGuardado = numero.toUpperCase();
+            } else if (/^[Tt](\d)$/.test(numero)) {
+                montoReal = montoBase * 10;
+                numeroGuardado = numero.toUpperCase();
+            } else {
+                continue; // número inválido para fijo
+            }
+        } else if (betType === 'corridos') {
+            if (!/^\d{2}$/.test(numero)) continue;
+        } else if (betType === 'centena') {
+            if (!/^\d{3}$/.test(numero)) continue;
+        } else if (betType === 'parle') {
+            if (!/^\d{2}x\d{2}$/.test(numero)) continue;
         } else {
-            return null;
+            continue;
         }
-    } else if (betType === 'corridos') {
-        if (!/^\d{2}$/.test(numero)) return null;
-    } else if (betType === 'centena') {
-        if (!/^\d{3}$/.test(numero)) return null;
-    } else if (betType === 'parle') {
-        if (!/^\d{2}x\d{2}$/.test(numero)) return null;
-    } else {
-        return null;
+
+        resultados.push({
+            numero: numeroGuardado,
+            usd: moneda === 'usd' ? montoReal : 0,
+            cup: moneda === 'cup' ? montoReal : 0
+        });
     }
 
-    return {
-        numero: numeroGuardado,
-        usd: moneda === 'usd' ? montoReal : 0,
-        cup: moneda === 'cup' ? montoReal : 0
-    };
+    return resultados;
 }
 
 function parseBetMessage(text, betType) {
@@ -159,11 +170,11 @@ function parseBetMessage(text, betType) {
     let totalUSD = 0, totalCUP = 0;
 
     for (const line of lines) {
-        const parsed = parseBetLine(line, betType);
-        if (parsed) {
-            items.push(parsed);
-            totalUSD += parsed.usd;
-            totalCUP += parsed.cup;
+        const parsedItems = parseBetLine(line, betType);
+        for (const item of parsedItems) {
+            items.push(item);
+            totalUSD += item.usd;
+            totalCUP += item.cup;
         }
     }
 
@@ -250,7 +261,12 @@ function getMainKeyboard(ctx) {
     if (ctx.from.id === ADMIN_ID) {
         buttons.push([Markup.button.callback('🔧 Admin', 'admin_panel')]);
     }
-    return Markup.inlineKeyboard(buttons);
+    // Convertir a filas de 2 botones (excepto el último si es impar)
+    const rows = [];
+    for (let i = 0; i < buttons.length; i += 2) {
+        rows.push(buttons.slice(i, i + 2).flat());
+    }
+    return Markup.inlineKeyboard(rows);
 }
 
 function playLotteryKbd() {
@@ -393,7 +409,7 @@ bot.action(/lot_(.+)/, async (ctx) => {
 
         if (error) {
             console.error('Error al consultar sesión:', error);
-            await ctx.reply('❌ Error al verificar sesión. Intenta más tarde.');
+            await ctx.reply('❌ Error al verificar sesión. Intenta más tarde.', getMainKeyboard(ctx));
             return;
         }
 
@@ -411,7 +427,7 @@ bot.action(/lot_(.+)/, async (ctx) => {
         );
     } catch (e) {
         console.error('Error en lot_ handler:', e);
-        await ctx.reply('❌ Ocurrió un error inesperado.');
+        await ctx.reply('❌ Ocurrió un error inesperado.', getMainKeyboard(ctx));
     }
 });
 
@@ -425,26 +441,26 @@ bot.action(/type_(.+)/, async (ctx) => {
     switch (betType) {
         case 'fijo':
             instructions = `🎯 <b>FIJO</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
-                `Escribe UNA LÍNEA por cada número de 2 DÍGITOS.\n` +
-                `<b>Formato:</b> <code>12 con 5 usd</code>  o  <code>34*2cup</code>\n` +
+                `Escribe UNA LÍNEA por cada jugada, o varios números separados por espacios/comas en una misma línea.\n` +
+                `<b>Formato:</b> <code>12 con 5 usd</code>  o  <code>09 10 34*2cup</code>\n` +
                 `También puedes usar <b>D</b> (decena) o <b>T</b> (terminal):\n` +
                 `- <code>D2 con 5 usd</code> significa TODOS los números que empiezan con 2 (20-29). El costo se multiplica por 10.\n` +
                 `- <code>T5 con 1 cup</code> significa TODOS los números que terminan con 5 (05,15,...,95). El costo se multiplica por 10.\n\n` +
-                `Ejemplos:\n12 con 1 usd\nD2 con 5 usd\nT5*1cup\n34*2 usd\n\n` +
-                `💭 <b>Escribe tus jugadas (una por línea):</b>`;
+                `Ejemplos:\n12 con 1 usd\n09 10 34 con 50 cup\nD2 con 5 usd\nT5*1cup\n34*2 usd\n\n` +
+                `💭 <b>Escribe tus jugadas (una o varias por línea):</b>`;
             break;
         case 'corridos':
             instructions = `🏃 <b>CORRIDOS</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
-                `Escribe UNA LÍNEA por cada número de 2 DÍGITOS.\n` +
-                `<b>Formato:</b> <code>17 con 1 usd</code>  o  <code>32*0.5usd</code>\n\n` +
-                `Ejemplo:\n17 con 1 usd\n32*0.5 usd\n62 con 10 cup\n\n` +
+                `Escribe UNA LÍNEA por cada número de 2 DÍGITOS, o varios separados.\n` +
+                `<b>Formato:</b> <code>17 con 1 usd</code>  o  <code>32 33*0.5usd</code>\n\n` +
+                `Ejemplo:\n17 con 1 usd\n32 33*0.5 usd\n62 con 10 cup\n\n` +
                 `💭 <b>Escribe tus jugadas:</b>`;
             break;
         case 'centena':
             instructions = `💯 <b>CENTENA</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
-                `Escribe UNA LÍNEA por cada número de 3 DÍGITOS.\n` +
-                `<b>Formato:</b> <code>517 con 2 usd</code>  o  <code>019*1usd</code>\n\n` +
-                `Ejemplo:\n517 con 2 usd\n019*1 usd\n123 con 5 cup\n\n` +
+                `Escribe UNA LÍNEA por cada número de 3 DÍGITOS, o varios separados.\n` +
+                `<b>Formato:</b> <code>517 con 2 usd</code>  o  <code>019 123*1usd</code>\n\n` +
+                `Ejemplo:\n517 con 2 usd\n019 123*1 usd\n123 con 5 cup\n\n` +
                 `💭 <b>Escribe tus jugadas:</b>`;
             break;
         case 'parle':
@@ -1203,7 +1219,7 @@ bot.on(message('text'), async (ctx) => {
         const method = session.depositMethod;
         const buffer = session.depositPhotoBuffer;
         if (!buffer) {
-            await ctx.reply('❌ Error: no se encontró la captura. Comienza de nuevo.');
+            await ctx.reply('❌ Error: no se encontró la captura. Comienza de nuevo.', getMainKeyboard(ctx));
             delete session.awaitingDepositAmount;
             return;
         }
@@ -1229,14 +1245,12 @@ bot.on(message('text'), async (ctx) => {
             await ctx.reply(`✅ <b>Solicitud de depósito enviada</b>\nMonto: ${amountText}\n⏳ En espera de aprobación. Te notificaremos cuando se acredite.`, { parse_mode: 'HTML' });
         } catch (e) {
             console.error(e);
-            await ctx.reply('❌ Error al procesar la solicitud. Intenta más tarde.');
+            await ctx.reply('❌ Error al procesar la solicitud. Intenta más tarde.', getMainKeyboard(ctx));
         }
 
         delete session.awaitingDepositAmount;
         delete session.depositMethod;
         delete session.depositPhotoBuffer;
-        // Mostrar menú principal
-        await ctx.reply('¿Qué deseas hacer ahora?', getMainKeyboard(ctx));
         return;
     }
 
@@ -1245,7 +1259,7 @@ bot.on(message('text'), async (ctx) => {
         const account = text;
         const amount = parseFloat(user.usd);
         if (amount < 1) {
-            await ctx.reply('❌ No tienes saldo USD suficiente para retirar.');
+            await ctx.reply('❌ No tienes saldo USD suficiente para retirar.', getMainKeyboard(ctx));
             delete session.awaitingWithdrawAccount;
             delete session.withdrawMethod;
             return;
@@ -1265,7 +1279,7 @@ bot.on(message('text'), async (ctx) => {
             .single();
 
         if (error) {
-            await ctx.reply(`❌ Error al crear la solicitud: ${error.message}`);
+            await ctx.reply(`❌ Error al crear la solicitud: ${error.message}`, getMainKeyboard(ctx));
         } else {
             await ctx.telegram.sendMessage(ADMIN_CHANNEL,
                 `📤 <b>Nueva solicitud de RETIRO</b>\n` +
@@ -1294,11 +1308,11 @@ bot.on(message('text'), async (ctx) => {
     if (session.awaitingTransferTarget) {
         const targetId = parseInt(text);
         if (isNaN(targetId)) {
-            await ctx.reply('❌ ID inválido. Debe ser un número entero.');
+            await ctx.reply('❌ ID inválido. Debe ser un número entero.', getMainKeyboard(ctx));
             return;
         }
         if (targetId === uid) {
-            await ctx.reply('❌ No puedes transferirte a ti mismo.');
+            await ctx.reply('❌ No puedes transferirte a ti mismo.', getMainKeyboard(ctx));
             return;
         }
 
@@ -1309,7 +1323,7 @@ bot.on(message('text'), async (ctx) => {
             .single();
 
         if (!targetUser) {
-            await ctx.reply('❌ El usuario destinatario no está registrado.');
+            await ctx.reply('❌ El usuario destinatario no está registrado.', getMainKeyboard(ctx));
             return;
         }
 
@@ -1324,11 +1338,11 @@ bot.on(message('text'), async (ctx) => {
     if (session.awaitingTransferAmount) {
         const amount = parseFloat(text.replace(',', '.'));
         if (isNaN(amount) || amount <= 0) {
-            await ctx.reply('❌ Monto inválido.');
+            await ctx.reply('❌ Monto inválido.', getMainKeyboard(ctx));
             return;
         }
         if (parseFloat(user.usd) < amount) {
-            await ctx.reply('❌ Saldo insuficiente.');
+            await ctx.reply('❌ Saldo insuficiente.', getMainKeyboard(ctx));
             return;
         }
 
@@ -1362,7 +1376,7 @@ bot.on(message('text'), async (ctx) => {
         const sessionId = session.sessionId;
 
         if (!sessionId) {
-            await ctx.reply('❌ No se ha seleccionado una sesión activa. Comienza de nuevo.');
+            await ctx.reply('❌ No se ha seleccionado una sesión activa. Comienza de nuevo.', getMainKeyboard(ctx));
             delete session.awaitingBet;
             return;
         }
@@ -1375,14 +1389,14 @@ bot.on(message('text'), async (ctx) => {
             .maybeSingle();
 
         if (!activeSession) {
-            await ctx.reply('❌ La sesión de juego ha sido cerrada. No se pueden registrar apuestas.');
+            await ctx.reply('❌ La sesión de juego ha sido cerrada. No se pueden registrar apuestas.', getMainKeyboard(ctx));
             delete session.awaitingBet;
             return;
         }
 
         const parsed = parseBetMessage(text, betType);
         if (!parsed.ok) {
-            await ctx.reply('❌ No se pudo interpretar tu apuesta. Verifica el formato y vuelve a intentarlo.');
+            await ctx.reply('❌ No se pudo interpretar tu apuesta. Verifica el formato y vuelve a intentarlo.', getMainKeyboard(ctx));
             return;
         }
 
@@ -1390,7 +1404,7 @@ bot.on(message('text'), async (ctx) => {
         const totalCUP = parsed.totalCUP;
 
         if (totalUSD === 0 && totalCUP === 0) {
-            await ctx.reply('❌ Debes especificar un monto válido (USD o CUP).');
+            await ctx.reply('❌ Debes especificar un monto válido (USD o CUP).', getMainKeyboard(ctx));
             return;
         }
 
@@ -1401,7 +1415,7 @@ bot.on(message('text'), async (ctx) => {
         if (totalUSD > 0) {
             const totalDisponible = newUsd + newBonus;
             if (totalDisponible < totalUSD) {
-                await ctx.reply('❌ Saldo USD (incluyendo bono) insuficiente.');
+                await ctx.reply('❌ Saldo USD (incluyendo bono) insuficiente.', getMainKeyboard(ctx));
                 return;
             }
             const usarBono = Math.min(newBonus, totalUSD);
@@ -1411,7 +1425,7 @@ bot.on(message('text'), async (ctx) => {
 
         if (totalCUP > 0) {
             if (newCup < totalCUP) {
-                await ctx.reply('❌ Saldo CUP insuficiente.');
+                await ctx.reply('❌ Saldo CUP insuficiente.', getMainKeyboard(ctx));
                 return;
             }
             newCup -= totalCUP;
@@ -1445,7 +1459,7 @@ bot.on(message('text'), async (ctx) => {
 
         if (error) {
             console.error('Error insertando apuesta:', error);
-            await ctx.reply('❌ Error al registrar la apuesta. Intenta más tarde.');
+            await ctx.reply('❌ Error al registrar la apuesta. Intenta más tarde.', getMainKeyboard(ctx));
             return;
         }
 
@@ -1460,8 +1474,6 @@ bot.on(message('text'), async (ctx) => {
         delete session.betType;
         delete session.lottery;
         delete session.sessionId;
-        // Mostrar menú principal
-        await ctx.reply('¿Qué deseas hacer ahora?', getMainKeyboard(ctx));
         return;
     }
 
