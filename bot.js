@@ -1,6 +1,7 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
 // Versión con teclado inline en filas de 2, formato múltiple de números, y soporte D/T
+// Incluye verificación de horarios por región con emojis
 // ==============================
 
 require('dotenv').config();
@@ -314,6 +315,38 @@ function adminPanelKbd() {
     return Markup.inlineKeyboard(buttons);
 }
 
+// ========== FUNCIÓN PARA OBTENER HORARIOS DE CADA LOTERÍA ==========
+function getAllowedHours(lotteryKey) {
+    const schedules = {
+        florida: {
+            name: 'Florida',
+            emoji: '🦩',
+            slots: [
+                { name: 'Mañana', start: 9, end: 13 },    // 9:00 - 13:00
+                { name: 'Noche',  start: 14, end: 21 }   // 14:00 - 21:00
+            ]
+        },
+        georgia: {
+            name: 'Georgia',
+            emoji: '🍑',
+            slots: [
+                { name: 'Mañana', start: 9, end: 12 },    // 9:00 - 12:00
+                { name: 'Tarde',  start: 14, end: 18.5 }, // 14:00 - 18:30
+                { name: 'Noche',  start: 20, end: 23 }    // 20:00 - 23:00
+            ]
+        },
+        newyork: {
+            name: 'Nueva York',
+            emoji: '🗽',
+            slots: [
+                { name: 'Mañana', start: 9, end: 14 },    // 9:00 - 14:00
+                { name: 'Tarde',  start: 15, end: 22 }    // 15:00 - 22:00
+            ]
+        }
+    };
+    return schedules[lotteryKey];
+}
+
 // ========== MIDDLEWARE: USUARIO ==========
 bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
@@ -372,30 +405,39 @@ bot.action('play', async (ctx) => {
 bot.action(/lot_(.+)/, async (ctx) => {
     try {
         const lotteryKey = ctx.match[1];
-        const lotteryName = {
-            florida: 'Florida',
-            georgia: 'Georgia',
-            newyork: 'Nueva York'
-        }[lotteryKey];
+        const schedule = getAllowedHours(lotteryKey);
+        const lotteryName = schedule.name;
 
         console.log(`Jugador ${ctx.from.id} seleccionó lotería ${lotteryName}`);
 
-        // Horario para Georgia
-        if (lotteryKey === 'georgia') {
-            const now = moment.tz(TIMEZONE);
-            const hour = now.hour();
-            const minute = now.minute();
-            const current = hour * 60 + minute;
-            const allowed = [
-                [9 * 60, 12 * 60],
-                [14 * 60, 18 * 60 + 30],
-                [20 * 60, 23 * 60]
-            ];
-            const isAllowed = allowed.some(([start, end]) => current >= start && current <= end);
-            if (!isAllowed) {
-                await ctx.answerCbQuery('⏰ Fuera de horario para Georgia', { show_alert: true });
-                return;
+        // Verificar horario permitido
+        const now = moment.tz(TIMEZONE);
+        const currentMinutes = now.hours() * 60 + now.minutes();
+        const isAllowed = schedule.slots.some(slot => {
+            const startMinutes = slot.start * 60;
+            const endMinutes = slot.end * 60;
+            return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+        });
+
+        if (!isAllowed) {
+            let hoursText = '';
+            for (const slot of schedule.slots) {
+                let emoji = '';
+                if (slot.name.includes('Mañana')) emoji = '🌅';
+                else if (slot.name.includes('Tarde')) emoji = '☀️';
+                else if (slot.name.includes('Noche')) emoji = '🌙';
+                const startStr = moment().tz(TIMEZONE).hours(Math.floor(slot.start)).minutes((slot.start % 1) * 60).format('h:mm A');
+                const endStr = moment().tz(TIMEZONE).hours(Math.floor(slot.end)).minutes((slot.end % 1) * 60).format('h:mm A');
+                hoursText += `${emoji} ${slot.name}: ${startStr} - ${endStr}\n`;
             }
+
+            const errorMsg = 
+                `⏰ <b>Fuera de horario para ${schedule.emoji} ${schedule.name}</b>\n\n` +
+                `📅 Horarios permitidos (hora de Cuba):\n${hoursText}\n` +
+                `🔄 Por favor, intenta dentro del horario o selecciona otra lotería.`;
+
+            await safeEdit(ctx, errorMsg, playLotteryKbd());
+            return;
         }
 
         const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
