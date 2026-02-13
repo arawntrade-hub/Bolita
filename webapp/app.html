@@ -90,6 +90,10 @@
         .status-closed {
             color: #ef4444;
         }
+        .status-published {
+            color: #10b981;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -397,7 +401,6 @@
         const modalBody = document.getElementById('modalBody');
 
         // ========== TIMEOUT DE SEGURIDAD ==========
-        // Si después de 5 segundos el loader sigue visible, lo ocultamos forzadamente
         setTimeout(() => {
             if (!globalLoader.classList.contains('hidden')) {
                 console.warn('Timeout: forzando ocultamiento del loader');
@@ -461,7 +464,6 @@
                     title: 'Error de conexión', 
                     message: 'No se pudo cargar la sesión. Verifica que el servidor esté activo.' 
                 });
-                // Ocultar loader y mostrar contenido vacío (para que no se quede cargando)
                 globalLoader.classList.add('hidden');
                 mainContent.classList.remove('hidden');
             }
@@ -715,13 +717,12 @@
             }
         }
 
-        // ========== VISTA DE SESIONES (CORREGIDA CON userId) ==========
+        // ========== VISTA DE SESIONES ==========
         async function renderSessionsView() {
             try {
                 const today = new Date().toISOString().split('T')[0];
                 let sessions = [];
                 try {
-                    // ✅ IMPORTANTE: Enviar userId en query string
                     const res = await fetch(`/api/admin/lottery-sessions?date=${today}&userId=${currentUser.telegram_id}`);
                     if (res.ok) {
                         sessions = await res.json();
@@ -781,7 +782,6 @@
             }
         }
 
-        // ========== TOGGLE SESIÓN (CREAR O CAMBIAR ESTADO) ==========
         window.toggleSession = async function(lottery, timeSlot, sessionId, currentStatus) {
             if (sessionId) {
                 const newStatus = currentStatus === 'open' ? 'closed' : 'open';
@@ -839,33 +839,55 @@
             }
         };
 
-        // ========== PUBLICAR GANADORES ==========
+        // ========== PUBLICAR GANADORES (ACTUALIZADA) ==========
         async function renderPublishWinningView() {
             try {
+                // Obtener TODAS las sesiones cerradas
                 const res = await fetch('/api/admin/lottery-sessions/closed', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ userId: currentUser.telegram_id })
                 });
                 const sessions = await res.json();
+
+                // Obtener números ya publicados para saber cuáles están listos
+                const pubRes = await fetch('/api/winning-numbers');
+                const published = await pubRes.json();
+                const publishedSet = new Set(published.map(p => `${p.lottery}|${p.date}|${p.time_slot}`));
+
                 let html = `<h4 class="text-xl font-semibold mb-4">🔢 Publicar números ganadores</h4>`;
                 html += `<p class="mb-2 text-sm text-yellow-300">⚠️ El número debe tener 7 dígitos (ej: 5173262 o 517 3262).</p>`;
+
                 if (sessions.length === 0) {
-                    html += '<p class="text-gray-400">No hay sesiones cerradas sin publicar.</p>';
+                    html += '<p class="text-gray-400">No hay sesiones cerradas.</p>';
                 } else {
-                    html += `<p class="mb-3">Selecciona una sesión:</p>`;
+                    html += `<div class="space-y-3">`;
                     sessions.forEach(s => {
+                        const isPublished = publishedSet.has(`${s.lottery}|${s.date}|${s.time_slot}`);
                         html += `
-                            <div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
-                                <div>
-                                    <span class="font-bold">${s.lottery}</span> - ${s.date} (${s.time_slot})
+                            <div class="bg-gray-800/70 p-4 rounded-xl flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-bold text-lg">${s.lottery}</span>
+                                        <span class="text-sm bg-gray-700 px-2 py-1 rounded-full">${s.date} (${s.time_slot})</span>
+                                        ${isPublished ? '<span class="text-green-400 text-sm font-bold"><i class="fas fa-check-circle mr-1"></i>✅ Listo</span>' : '<span class="text-yellow-400 text-sm">⏳ Pendiente</span>'}
+                                    </div>
+                                    <p class="text-xs text-gray-400 mt-1">Cierre: ${new Date(s.end_time).toLocaleString()}</p>
                                 </div>
-                                <button onclick="publishWinning(${s.id})" class="bg-teal-600 px-4 py-1 rounded-lg text-sm hover:bg-teal-700">
-                                    Publicar
-                                </button>
+                                <div class="flex gap-2">
+                                    ${!isPublished ? 
+                                        `<button onclick="publishWinning(${s.id})" class="bg-teal-600 px-4 py-2 rounded-lg text-sm hover:bg-teal-700 transition">
+                                            <i class="fas fa-upload mr-1"></i>Publicar
+                                        </button>` : 
+                                        `<button onclick="showWinners(${s.id})" class="bg-blue-600 px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition">
+                                            <i class="fas fa-trophy mr-1"></i>Ver ganadores
+                                        </button>`
+                                    }
+                                </div>
                             </div>
                         `;
                     });
+                    html += `</div>`;
                 }
                 adminViewContainer.innerHTML = html;
             } catch (e) {
@@ -873,6 +895,44 @@
                 adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones.</p>';
             }
         }
+
+        // ========== NUEVA FUNCIÓN: Mostrar ganadores en modal ==========
+        window.showWinners = async function(sessionId) {
+            try {
+                const res = await fetch(`/api/admin/winning-numbers/${sessionId}/winners?userId=${currentUser.telegram_id}`);
+                const data = await res.json();
+                let modalContent = `<h4 class="text-xl font-bold mb-4">🏆 Ganadores de la sesión</h4>`;
+                
+                if (!data.winning_number) {
+                    modalContent += `<p class="text-yellow-300">Aún no se ha publicado número ganador.</p>`;
+                } else {
+                    modalContent += `<p class="mb-3">🔢 Número ganador: <span class="font-mono bg-gray-900 px-2 py-1 rounded">${data.winning_number}</span></p>`;
+                    if (data.winners.length === 0) {
+                        modalContent += `<p class="text-gray-400">No hubo ganadores en esta sesión.</p>`;
+                    } else {
+                        modalContent += `<div class="space-y-2 max-h-96 overflow-y-auto">`;
+                        data.winners.forEach(w => {
+                            modalContent += `
+                                <div class="bg-gray-700/50 p-3 rounded-lg">
+                                    <div class="flex justify-between items-center">
+                                        <span class="font-bold">${escapeHTML(w.first_name)}</span>
+                                        <span class="text-cyan-300">${w.prize_usd.toFixed(2)} USD / ${w.prize_cup.toFixed(2)} CUP</span>
+                                    </div>
+                                    <p class="text-xs text-gray-400 mt-1">${escapeHTML(w.bet_text)}</p>
+                                </div>
+                            `;
+                        });
+                        modalContent += `</div>`;
+                    }
+                }
+                modalContent += `<button onclick="document.getElementById('adminModal').classList.add('hidden')" class="mt-4 w-full bg-gray-600 py-2 rounded-lg">Cerrar</button>`;
+                document.getElementById('modalBody').innerHTML = modalContent;
+                document.getElementById('adminModal').classList.remove('hidden');
+            } catch (e) {
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar ganadores' });
+            }
+        };
 
         window.publishWinning = async function(sessionId) {
             const number = prompt('Ingresa el número ganador de 7 DÍGITOS (centena + cuarteta, ej: 5173262 o 517 3262):');
@@ -1141,8 +1201,6 @@
                 iziToast.warning({ message: 'Selecciona método y escribe el monto' });
                 return;
             }
-            // En una implementación real aquí se manejaría la captura de pantalla.
-            // Por ahora, simulamos éxito.
             iziToast.success({ message: 'Solicitud de recarga enviada (simulado)' });
             document.getElementById('rechargeSection').classList.add('hidden');
             document.getElementById('depositAmount').value = '';
@@ -1258,6 +1316,16 @@
             if (usdMatch) usd = parseFloat(usdMatch[1]);
             if (cupMatch) cup = parseFloat(cupMatch[1]);
             return { usd, cup };
+        }
+
+        function escapeHTML(str) {
+            return String(str).replace(/[&<>"]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                if (m === '"') return '&quot;';
+                return m;
+            });
         }
 
         // ========== INICIALIZAR ==========
