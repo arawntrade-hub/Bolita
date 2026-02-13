@@ -45,6 +45,9 @@ const upload = multer({
 
 // ========== FUNCIONES AUXILIARES ==========
 
+/**
+ * Verifica la firma de Telegram WebApp.
+ */
 function verifyTelegramWebAppData(initData, botToken) {
     const encoded = decodeURIComponent(initData);
     const arr = encoded.split('&');
@@ -57,6 +60,9 @@ function verifyTelegramWebAppData(initData, botToken) {
     return computedHash === hash;
 }
 
+/**
+ * Obtiene o crea un usuario en Supabase.
+ */
 async function getOrCreateUser(telegramId, firstName = 'Jugador') {
     let { data: user } = await supabase
         .from('users')
@@ -75,6 +81,9 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador') {
     return user;
 }
 
+/**
+ * Obtiene la tasa de cambio actual.
+ */
 async function getExchangeRate() {
     const { data } = await supabase
         .from('exchange_rate')
@@ -84,6 +93,9 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
+/**
+ * Parsea una línea de apuesta (mismo algoritmo que en bot.js)
+ */
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return null;
@@ -118,6 +130,9 @@ function parseBetLine(line, betType) {
     };
 }
 
+/**
+ * Parsea el mensaje completo de apuesta (varias líneas)
+ */
 function parseBetMessage(text, betType) {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
     const items = [];
@@ -140,13 +155,16 @@ function parseBetMessage(text, betType) {
     };
 }
 
+/**
+ * Genera fecha de cierre de sesión según turno (Día/Noche)
+ */
 function getEndTimeFromSlot(timeSlot) {
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     let hour, minute;
     if (timeSlot === 'Día') {
         hour = 12;
         minute = 0;
-    } else {
+    } else { // Noche
         hour = 23;
         minute = 0;
     }
@@ -168,6 +186,7 @@ async function requireAdmin(req, res, next) {
 
 // ========== ENDPOINTS PÚBLICOS ==========
 
+// --- Autenticación ---
 app.post('/api/auth', async (req, res) => {
     const { initData } = req.body;
     if (!initData) return res.status(400).json({ error: 'Falta initData' });
@@ -195,6 +214,7 @@ app.post('/api/auth', async (req, res) => {
     });
 });
 
+// --- Métodos de depósito ---
 app.get('/api/deposit-methods', async (req, res) => {
     const { data } = await supabase.from('deposit_methods').select('*').order('id');
     res.json(data || []);
@@ -204,6 +224,7 @@ app.get('/api/deposit-methods/:id', async (req, res) => {
     res.json(data);
 });
 
+// --- Métodos de retiro ---
 app.get('/api/withdraw-methods', async (req, res) => {
     const { data } = await supabase.from('withdraw_methods').select('*').order('id');
     res.json(data || []);
@@ -213,16 +234,19 @@ app.get('/api/withdraw-methods/:id', async (req, res) => {
     res.json(data);
 });
 
+// --- Precios de jugadas ---
 app.get('/api/play-prices', async (req, res) => {
     const { data } = await supabase.from('play_prices').select('*');
     res.json(data || []);
 });
 
+// --- Tasa de cambio ---
 app.get('/api/exchange-rate', async (req, res) => {
     const rate = await getExchangeRate();
     res.json({ rate });
 });
 
+// --- Números ganadores (últimos 10) ---
 app.get('/api/winning-numbers', async (req, res) => {
     const { data } = await supabase
         .from('winning_numbers')
@@ -232,9 +256,12 @@ app.get('/api/winning-numbers', async (req, res) => {
     res.json(data || []);
 });
 
+// --- Sesión activa para una lotería (usado en WebApp) ---
 app.get('/api/lottery-sessions/active', async (req, res) => {
     const { lottery, date } = req.query;
-    if (!lottery || !date) return res.status(400).json({ error: 'Faltan parámetros' });
+    if (!lottery || !date) {
+        return res.status(400).json({ error: 'Faltan parámetros' });
+    }
     const { data } = await supabase
         .from('lottery_sessions')
         .select('*')
@@ -245,6 +272,7 @@ app.get('/api/lottery-sessions/active', async (req, res) => {
     res.json(data);
 });
 
+// --- Solicitud de depósito (con captura) ---
 app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) => {
     const { methodId, userId, amount } = req.body;
     const file = req.file;
@@ -284,6 +312,7 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         return res.status(500).json({ error: 'Error al guardar solicitud' });
     }
 
+    // Notificar al canal de admin
     try {
         const method = await supabase.from('deposit_methods').select('name').eq('id', methodId).single();
         const methodName = method.data?.name || 'Desconocido';
@@ -305,6 +334,7 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
     res.json({ success: true, requestId: request.id });
 });
 
+// --- Solicitud de retiro ---
 app.post('/api/withdraw-requests', async (req, res) => {
     const { methodId, amount, account, userId } = req.body;
     if (!methodId || !amount || !account || !userId) {
@@ -332,6 +362,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
         return res.status(500).json({ error: 'Error al crear solicitud' });
     }
 
+    // Descontar saldo inmediatamente (política de la plataforma)
     await supabase
         .from('users')
         .update({ usd: parseFloat(user.usd) - amount, updated_at: new Date() })
@@ -358,6 +389,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
     res.json({ success: true, requestId: request.id });
 });
 
+// --- Transferencia entre usuarios ---
 app.post('/api/transfer', async (req, res) => {
     const { from, to, amount } = req.body;
     if (!from || !to || !amount || amount <= 0) {
@@ -389,12 +421,14 @@ app.post('/api/transfer', async (req, res) => {
     res.json({ success: true });
 });
 
+// --- Registro de apuestas (con items y verificación de sesión) ---
 app.post('/api/bets', async (req, res) => {
     const { userId, lottery, betType, rawText, sessionId } = req.body;
     if (!userId || !lottery || !betType || !rawText) {
         return res.status(400).json({ error: 'Faltan datos' });
     }
 
+    // Verificar sesión activa
     if (sessionId) {
         const { data: activeSession } = await supabase
             .from('lottery_sessions')
@@ -419,6 +453,7 @@ app.post('/api/bets', async (req, res) => {
         return res.status(400).json({ error: 'Debes especificar un monto válido (USD o CUP)' });
     }
 
+    // Verificar y descontar saldo
     let newUsd = parseFloat(user.usd);
     let newBonus = parseFloat(user.bonus_usd);
     let newCup = parseFloat(user.cup);
@@ -450,6 +485,7 @@ app.post('/api/bets', async (req, res) => {
         })
         .eq('telegram_id', userId);
 
+    // Insertar apuesta
     const { data: bet, error: betError } = await supabase
         .from('bets')
         .insert({
@@ -475,6 +511,7 @@ app.post('/api/bets', async (req, res) => {
     res.json({ success: true, bet, updatedUser });
 });
 
+// --- Historial de apuestas del usuario ---
 app.get('/api/user/:userId/bets', async (req, res) => {
     const { userId } = req.params;
     const limit = parseInt(req.query.limit) || 5;
@@ -487,6 +524,7 @@ app.get('/api/user/:userId/bets', async (req, res) => {
     res.json(data || []);
 });
 
+// --- Cantidad de referidos ---
 app.get('/api/user/:userId/referrals/count', async (req, res) => {
     const { userId } = req.params;
     const { count } = await supabase
@@ -498,6 +536,7 @@ app.get('/api/user/:userId/referrals/count', async (req, res) => {
 
 // ========== ENDPOINTS DE ADMIN ==========
 
+// --- Añadir método de depósito ---
 app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
     const { name, card, confirm } = req.body;
     if (!name || !card || !confirm) {
@@ -512,6 +551,7 @@ app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
     res.json(data);
 });
 
+// --- Añadir método de retiro ---
 app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
     const { name, card, confirm } = req.body;
     if (!name || !card) {
@@ -526,6 +566,7 @@ app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
     res.json(data);
 });
 
+// --- Actualizar tasa de cambio ---
 app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
     const { rate } = req.body;
     if (!rate || rate <= 0) {
@@ -538,6 +579,7 @@ app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
     res.json({ success: true, rate });
 });
 
+// --- Actualizar precios y multiplicadores de una jugada ---
 app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     const { betType } = req.params;
     const { amount_cup, amount_usd, payout_multiplier } = req.body;
@@ -560,9 +602,12 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
+// --- Obtener sesiones de una fecha específica (admin) ---
 app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { date } = req.query;
-    if (!date) return res.status(400).json({ error: 'Falta fecha' });
+    if (!date) {
+        return res.status(400).json({ error: 'Falta fecha' });
+    }
     const { data } = await supabase
         .from('lottery_sessions')
         .select('*')
@@ -570,6 +615,7 @@ app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     res.json(data || []);
 });
 
+// --- Crear nueva sesión (abrir) ---
 app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { lottery, time_slot } = req.body;
     if (!lottery || !time_slot) {
@@ -582,6 +628,7 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     const endTime = getEndTimeFromSlot(time_slot);
 
+    // Verificar si ya existe
     const { data: existing } = await supabase
         .from('lottery_sessions')
         .select('id')
@@ -610,6 +657,7 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     res.json(data);
 });
 
+// --- Cambiar estado de una sesión (abrir/cerrar) ---
 app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) => {
     const { sessionId, status } = req.body;
     if (!sessionId || !status) {
@@ -630,7 +678,7 @@ app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) =>
     res.json(data);
 });
 
-// --- Obtener sesiones cerradas (TODAS, con indicador de publicación) ---
+// --- Obtener sesiones cerradas (para publicar ganadores) ---
 app.post('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) => {
     const { data } = await supabase
         .from('lottery_sessions')
