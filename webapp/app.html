@@ -756,59 +756,68 @@
                 console.error(e);
                 adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones. Verifica la conexión con el servidor.</p>';
             }
+// ========== VISTA DE SESIONES (CORREGIDA, ENVÍA userId) ==========
+async function renderSessionsView() {
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        let sessions = [];
+        try {
+            // ✅ ENVIAR userId COMO QUERY PARAM
+            const res = await fetch(`/api/admin/lottery-sessions?date=${today}&userId=${currentUser.telegram_id}`);
+            if (res.ok) sessions = await res.json();
+            else console.warn('Error en respuesta:', await res.text());
+        } catch (e) {
+            console.warn('Usando datos de ejemplo (endpoint no disponible)');
         }
 
-        window.toggleSession = async function(lottery, timeSlot, sessionId, currentStatus) {
-            if (sessionId) {
-                const newStatus = currentStatus === 'open' ? 'closed' : 'open';
-                try {
-                    const res = await fetch('/api/admin/lottery-sessions/toggle', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ sessionId, status: newStatus, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) {
-                        iziToast.success({ message: `Sesión ${newStatus === 'open' ? 'abierta' : 'cerrada'}` });
-                        renderSessionsView();
-                    } else {
-                        iziToast.error({ message: 'Error al cambiar estado' });
-                    }
-                } catch (e) {
-                    iziToast.error({ message: 'Error de conexión' });
-                }
-            } else {
-                try {
-                    const today = new Date().toISOString().split('T')[0];
-                    let endHour, endMinute;
-                    if (timeSlot === 'Día') { endHour = 12; endMinute = 0; }
-                    else { endHour = 23; endMinute = 0; }
-                    const endTimeStr = `${today} ${endHour.toString().padStart(2,'0')}:${endMinute.toString().padStart(2,'0')}:00`;
-                    const endTime = new Date(endTimeStr + ' America/Havana').toISOString();
+        const loterias = ['Florida', 'Georgia', 'Nueva York'];
+        const turnos = ['Día', 'Noche'];
 
-                    const res = await fetch('/api/admin/lottery-sessions', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            lottery,
-                            date: today,
-                            time_slot: timeSlot,
-                            end_time: endTime,
-                            userId: currentUser.telegram_id
-                        })
-                    });
-                    if (res.ok) {
-                        iziToast.success({ message: `Sesión de ${lottery} (${timeSlot}) abierta` });
-                        renderSessionsView();
+        let html = `<h4 class="text-xl font-semibold mb-4">🎰 Gestión de Sesiones</h4>`;
+        html += `<p class="mb-3 text-sm text-gray-300">Selecciona una región para ver sus turnos:</p>`;
+
+        for (const lot of loterias) {
+            html += `<div class="mb-4 bg-gray-800/30 p-3 rounded-xl">`;
+            html += `<h5 class="font-bold text-lg mb-2">${lot}</h5>`;
+            html += `<div class="grid grid-cols-2 gap-2">`;
+            
+            for (const turno of turnos) {
+                const session = sessions.find(s => s.lottery === lot && s.time_slot === turno && s.date === today);
+                let estado, clase, accion;
+                if (session) {
+                    if (session.status === 'open') {
+                        estado = '✅ ACTIVA';
+                        clase = 'status-active';
+                        accion = 'Cerrar';
                     } else {
-                        const err = await res.json();
-                        iziToast.error({ message: err.error || 'Error al abrir sesión' });
+                        estado = '🔴 CERRADA';
+                        clase = 'status-closed';
+                        accion = 'Abrir';
                     }
-                } catch (e) {
-                    iziToast.error({ message: 'Error de conexión' });
+                } else {
+                    estado = '⚪ INACTIVA';
+                    clase = 'status-inactive';
+                    accion = 'Abrir';
                 }
+
+                html += `<div class="bg-gray-700/50 p-2 rounded-lg text-center">
+                            <span class="block text-sm">${turno}</span>
+                            <span class="${clase} text-xs">${estado}</span>
+                            <button onclick="toggleSession('${lot}', '${turno}', ${session ? session.id : 'null'}, '${session ? session.status : 'closed'}')" 
+                                    class="mt-2 bg-${session && session.status === 'open' ? 'red' : 'green'}-600 px-3 py-1 rounded-lg text-xs w-full">
+                                ${accion}
+                            </button>
+                        </div>`;
             }
-        };
-
+            html += `</div></div>`;
+        }
+        html += `<button onclick="renderSessionsView()" class="mt-2 bg-blue-600 px-4 py-2 rounded-xl text-sm">🔄 Actualizar</button>`;
+        adminViewContainer.innerHTML = html;
+    } catch (e) {
+        console.error(e);
+        adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones. Verifica la conexión con el servidor.</p>';
+    }
+}
         // ========== PUBLICAR GANADORES ==========
         async function renderPublishWinningView() {
             try {
