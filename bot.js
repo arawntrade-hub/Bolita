@@ -2,6 +2,7 @@
 // bot.js - Bot de Telegram para Rifas Cuba
 // Versión con teclado inline en filas de 2, formato múltiple de números, y soporte D/T
 // Incluye verificación de horarios por región con emojis
+// SESIONES SOLO MANUALES (se eliminó el cierre automático)
 // ==============================
 
 require('dotenv').config();
@@ -9,7 +10,6 @@ const { Telegraf, Markup } = require('telegraf');
 const { message } = require('telegraf/filters');
 const LocalSession = require('telegraf-session-local');
 const { createClient } = require('@supabase/supabase-js');
-const cron = require('node-cron');
 const moment = require('moment-timezone');
 const axios = require('axios');
 
@@ -111,8 +111,6 @@ function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return [];
 
-    // Buscar el patrón: números separados por espacios o comas, luego "con" o "*", luego monto y moneda
-    // Ej: "09 10 34 con 50 cup" o "12,15*2usd"
     const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/);
     if (!match) return [];
 
@@ -120,16 +118,13 @@ function parseBetLine(line, betType) {
     const montoStr = match[2];
     const moneda = match[3] || 'usd';
 
-    // Separar números por espacios o comas
     const numeros = numerosStr.split(/[\s,]+/).filter(n => n.length > 0);
-
     const montoBase = parseFloat(montoStr);
     if (isNaN(montoBase) || montoBase <= 0) return [];
 
     const resultados = [];
 
     for (let numero of numeros) {
-        // Validar según el tipo de jugada
         let montoReal = montoBase;
         let numeroGuardado = numero;
 
@@ -143,7 +138,7 @@ function parseBetLine(line, betType) {
                 montoReal = montoBase * 10;
                 numeroGuardado = numero.toUpperCase();
             } else {
-                continue; // número inválido para fijo
+                continue;
             }
         } else if (betType === 'corridos') {
             if (!/^\d{2}$/.test(numero)) continue;
@@ -185,20 +180,6 @@ function parseBetMessage(text, betType) {
         totalCUP,
         ok: items.length > 0
     };
-}
-
-function getEndTimeFromSlot(timeSlot) {
-    const now = moment.tz(TIMEZONE);
-    let hour, minute;
-    if (timeSlot === 'Día') {
-        hour = 12;
-        minute = 0;
-    } else {
-        hour = 23;
-        minute = 0;
-    }
-    const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
-    return endTime.toDate();
 }
 
 // ========== FUNCIÓN DE BROADCAST GLOBAL ==========
@@ -262,7 +243,6 @@ function getMainKeyboard(ctx) {
     if (ctx.from.id === ADMIN_ID) {
         buttons.push([Markup.button.callback('🔧 Admin', 'admin_panel')]);
     }
-    // Convertir a filas de 2 botones (excepto el último si es impar)
     const rows = [];
     for (let i = 0; i < buttons.length; i += 2) {
         rows.push(buttons.slice(i, i + 2).flat());
@@ -526,7 +506,7 @@ bot.action('my_money', async (ctx) => {
     await safeEdit(ctx, text, myMoneyKbd());
 });
 
-// ---------- RECARGAR (nuevo flujo con captura) ----------
+// ---------- RECARGAR ----------
 bot.action('recharge', async (ctx) => {
     const { data: methods } = await supabase
         .from('deposit_methods')
@@ -707,7 +687,7 @@ bot.action('admin_panel', async (ctx) => {
     await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
 });
 
-// ========== GESTIÓN DE SESIONES ==========
+// ========== GESTIÓN DE SESIONES (SOLO MANUAL) ==========
 bot.action('admin_sessions', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     await showRegionsMenu(ctx);
@@ -768,13 +748,12 @@ async function showRegionSessions(ctx, lottery) {
     }
 }
 
-// Crear sesión
+// Crear sesión (sin cierre automático, solo manual)
 bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     try {
         const lottery = ctx.match[1];
         const timeSlot = ctx.match[2];
-        const endTime = getEndTimeFromSlot(timeSlot);
         const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
 
         const { data: existing } = await supabase
@@ -796,20 +775,19 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
                 lottery,
                 date: today,
                 time_slot: timeSlot,
-                status: 'open',
-                end_time: endTime.toISOString()
+                status: 'open'
+                // end_time se omite (o se puede poner null) – el cierre es solo manual
             });
 
         if (error) throw error;
 
         await ctx.answerCbQuery('✅ Sesión abierta');
 
-        // Broadcast inspirador
+        // Broadcast sin mención de hora de cierre
         await broadcastToAllUsers(
             `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
             `✨ La región <b>${escapeHTML(lottery)}</b> acaba de abrir su turno de <b>${escapeHTML(timeSlot)}</b>.\n` +
             `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
-            `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
             `🍀 ¡La suerte te espera!`
         );
 
@@ -820,7 +798,7 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
     }
 });
 
-// Cambiar estado de sesión
+// Cambiar estado de sesión (manual)
 bot.action(/toggle_session_(\d+)_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     try {
@@ -979,7 +957,7 @@ bot.action(/publish_win_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== PROCESAR NÚMERO GANADOR (con soporte D/T) ==========
+// ========== PROCESAR NÚMERO GANADOR ==========
 async function processWinningNumber(sessionId, winningStr, ctx) {
     winningStr = winningStr.replace(/\s+/g, '');
     if (!/^\d{7}$/.test(winningStr)) {
@@ -1529,15 +1507,12 @@ bot.on(message('photo'), async (ctx) => {
     const session = ctx.session;
 
     if (session.awaitingDepositPhoto) {
-        // Obtener la foto de mayor resolución
         const photo = ctx.message.photo.pop();
         const fileId = photo.file_id;
         const fileLink = await ctx.telegram.getFileLink(fileId);
-        // Descargar el archivo
         const response = await axios({ url: fileLink.href, responseType: 'arraybuffer' });
         const buffer = Buffer.from(response.data, 'binary');
 
-        // Guardar en sesión
         session.depositPhotoBuffer = buffer;
         delete session.awaitingDepositPhoto;
         session.awaitingDepositAmount = true;
@@ -1546,7 +1521,6 @@ bot.on(message('photo'), async (ctx) => {
         return;
     }
 
-    // Si no se esperaba foto, responder con menú
     await ctx.reply('No se esperaba una foto. Usa los botones del menú.', getMainKeyboard(ctx));
 });
 
@@ -1569,7 +1543,6 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
             return;
         }
 
-        // Parsear el monto
         const { usd, cup } = parseAmount(request.amount);
         const user = await getUser(request.user_id);
         let updateData = { updated_at: new Date() };
@@ -1716,40 +1689,6 @@ bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
         await ctx.answerCbQuery('❌ Error al rechazar', { show_alert: true });
     }
 });
-
-// ========== CIERRE AUTOMÁTICO DE SESIONES ==========
-async function closeExpiredSessions() {
-    try {
-        const now = new Date().toISOString();
-        const { data: expiredSessions } = await supabase
-            .from('lottery_sessions')
-            .select('*')
-            .eq('status', 'open')
-            .lt('end_time', now);
-
-        for (const session of expiredSessions || []) {
-            await supabase
-                .from('lottery_sessions')
-                .update({ status: 'closed', updated_at: new Date() })
-                .eq('id', session.id);
-
-            // Broadcast de cierre automático
-            await broadcastToAllUsers(
-                `⏰ <b>SESIÓN CERRADA AUTOMÁTICAMENTE</b>\n\n` +
-                `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
-                `📅 Fecha: ${session.date}\n\n` +
-                `❌ El tiempo para apostar ha finalizado.\n` +
-                `🔢 Pronto se publicará el número ganador. ¡Gracias por participar!`
-            );
-        }
-    } catch (e) {
-        console.error('Error cerrando sesiones:', e);
-    }
-}
-
-cron.schedule('* * * * *', () => {
-    closeExpiredSessions();
-}, { timezone: TIMEZONE });
 
 // ========== EXPORTAR BOT ==========
 module.exports = bot;
