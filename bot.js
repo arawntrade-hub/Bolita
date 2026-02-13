@@ -1,8 +1,7 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión con teclado inline en filas de 2, formato múltiple de números, y soporte D/T
-// Incluye verificación de horarios por región con emojis
-// SESIONES SOLO MANUALES (se eliminó el cierre automático)
+// Versión con teclado inline, horarios por región, configuración interactiva de precios
+// y mínimos de depósito/retiro configurables
 // ==============================
 
 require('dotenv').config();
@@ -10,6 +9,7 @@ const { Telegraf, Markup } = require('telegraf');
 const { message } = require('telegraf/filters');
 const LocalSession = require('telegraf-session-local');
 const { createClient } = require('@supabase/supabase-js');
+const cron = require('node-cron');
 const moment = require('moment-timezone');
 const axios = require('axios');
 
@@ -96,6 +96,37 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
+// Obtener configuración de mínimos
+async function getMinDepositUSD() {
+    const { data } = await supabase
+        .from('app_config')
+        .select('value')
+        .eq('key', 'min_deposit_usd')
+        .single();
+    return data ? parseFloat(data.value) : 1.0;
+}
+
+async function getMinWithdrawUSD() {
+    const { data } = await supabase
+        .from('app_config')
+        .select('value')
+        .eq('key', 'min_withdraw_usd')
+        .single();
+    return data ? parseFloat(data.value) : 1.0;
+}
+
+async function setMinDepositUSD(value) {
+    await supabase
+        .from('app_config')
+        .upsert({ key: 'min_deposit_usd', value: value.toString() }, { onConflict: 'key' });
+}
+
+async function setMinWithdrawUSD(value) {
+    await supabase
+        .from('app_config')
+        .upsert({ key: 'min_withdraw_usd', value: value.toString() }, { onConflict: 'key' });
+}
+
 function parseAmount(text) {
     const lower = text.toLowerCase().replace(',', '.').trim();
     let usd = 0, cup = 0;
@@ -180,6 +211,26 @@ function parseBetMessage(text, betType) {
         totalCUP,
         ok: items.length > 0
     };
+}
+
+// Calcula la hora de cierre para un turno (Día o Noche) en el día actual.
+// Si la hora actual ya supera la hora de cierre, retorna null (no se puede abrir).
+function getEndTimeFromSlot(timeSlot) {
+    const now = moment.tz(TIMEZONE);
+    let hour, minute;
+    if (timeSlot === 'Día') {
+        hour = 12;
+        minute = 0;
+    } else {
+        hour = 23;
+        minute = 0;
+    }
+    const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
+    // Si la hora actual es mayor o igual a la hora de cierre, no se puede abrir hoy
+    if (now.isSameOrAfter(endTime)) {
+        return null;
+    }
+    return endTime.toDate();
 }
 
 // ========== FUNCIÓN DE BROADCAST GLOBAL ==========
@@ -289,6 +340,8 @@ function adminPanelKbd() {
         [Markup.button.callback('➕ Añadir método RETIRO', 'adm_add_wit')],
         [Markup.button.callback('💰 Configurar tasa USD/CUP', 'adm_set_rate')],
         [Markup.button.callback('🎲 Configurar precios y pagos', 'adm_set_prices')],
+        [Markup.button.callback('💰 Mínimo depósito', 'adm_min_deposit')],
+        [Markup.button.callback('💰 Mínimo retiro', 'adm_min_withdraw')],
         [Markup.button.callback('📋 Ver datos actuales', 'adm_view')],
         [Markup.button.callback('◀ Menú principal', 'main')]
     ];
@@ -508,6 +561,7 @@ bot.action('my_money', async (ctx) => {
 
 // ---------- RECARGAR ----------
 bot.action('recharge', async (ctx) => {
+    const minDeposit = await getMinDepositUSD();
     const { data: methods } = await supabase
         .from('deposit_methods')
         .select('*')
@@ -525,6 +579,7 @@ bot.action('recharge', async (ctx) => {
     await safeEdit(ctx,
         `💵 <b>¿Cómo deseas recargar?</b>\n\n` +
         `Elige una opción para ver los datos de pago. Luego deberás enviar una <b>captura de pantalla</b> de la transferencia y el monto.\n\n` +
+        `<b>Mínimo de depósito:</b> ${minDeposit} USD\n` +
         `<b>Tasa de cambio:</b> 1 USD = ${rate} CUP`,
         Markup.inlineKeyboard(buttons)
     );
@@ -558,8 +613,9 @@ bot.action(/dep_(\d+)/, async (ctx) => {
 // ---------- RETIRAR ----------
 bot.action('withdraw', async (ctx) => {
     const user = ctx.dbUser;
-    if (parseFloat(user.usd) < 1.0) {
-        await ctx.answerCbQuery('❌ Necesitas al menos 1 USD para retirar.', { show_alert: true });
+    const minWithdraw = await getMinWithdrawUSD();
+    if (parseFloat(user.usd) < minWithdraw) {
+        await ctx.answerCbQuery(`❌ Necesitas al menos ${minWithdraw} USD para retirar.`, { show_alert: true });
         return;
     }
 
@@ -687,7 +743,7 @@ bot.action('admin_panel', async (ctx) => {
     await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
 });
 
-// ========== GESTIÓN DE SESIONES (SOLO MANUAL) ==========
+// ========== GESTIÓN DE SESIONES ==========
 bot.action('admin_sessions', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     await showRegionsMenu(ctx);
@@ -748,12 +804,17 @@ async function showRegionSessions(ctx, lottery) {
     }
 }
 
-// Crear sesión (sin cierre automático, solo manual)
+// Crear sesión (con validación de hora de cierre)
 bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     try {
         const lottery = ctx.match[1];
         const timeSlot = ctx.match[2];
+        const endTime = getEndTimeFromSlot(timeSlot);
+        if (!endTime) {
+            await ctx.answerCbQuery(`❌ La hora de cierre para el turno ${timeSlot} ya pasó hoy. No se puede abrir.`, { show_alert: true });
+            return;
+        }
         const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
 
         const { data: existing } = await supabase
@@ -775,19 +836,20 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
                 lottery,
                 date: today,
                 time_slot: timeSlot,
-                status: 'open'
-                // end_time se omite (o se puede poner null) – el cierre es solo manual
+                status: 'open',
+                end_time: endTime.toISOString()
             });
 
         if (error) throw error;
 
         await ctx.answerCbQuery('✅ Sesión abierta');
 
-        // Broadcast sin mención de hora de cierre
+        // Broadcast inspirador
         await broadcastToAllUsers(
             `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
             `✨ La región <b>${escapeHTML(lottery)}</b> acaba de abrir su turno de <b>${escapeHTML(timeSlot)}</b>.\n` +
             `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
+            `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
             `🍀 ¡La suerte te espera!`
         );
 
@@ -798,7 +860,7 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
     }
 });
 
-// Cambiar estado de sesión (manual)
+// Cambiar estado de sesión
 bot.action(/toggle_session_(\d+)_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     try {
@@ -862,6 +924,24 @@ bot.action('adm_set_rate', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
+// ========== ADMIN: CONFIGURAR MÍNIMOS ==========
+bot.action('adm_min_deposit', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const current = await getMinDepositUSD();
+    ctx.session.adminAction = 'set_min_deposit';
+    await ctx.reply(`💰 <b>Mínimo de depósito actual:</b> ${current} USD\n\nEnvía el nuevo mínimo (solo número, ej: 5):`, { parse_mode: 'HTML' });
+    await ctx.answerCbQuery();
+});
+
+bot.action('adm_min_withdraw', async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const current = await getMinWithdrawUSD();
+    ctx.session.adminAction = 'set_min_withdraw';
+    await ctx.reply(`💰 <b>Mínimo de retiro actual:</b> ${current} USD\n\nEnvía el nuevo mínimo (solo número, ej: 2):`, { parse_mode: 'HTML' });
+    await ctx.answerCbQuery();
+});
+
+// ========== ADMIN: CONFIGURAR PRECIOS (nuevo flujo interactivo) ==========
 bot.action('adm_set_prices', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const { data: prices } = await supabase.from('play_prices').select('*');
@@ -876,23 +956,30 @@ bot.action(/set_price_(.+)/, async (ctx) => {
     const betType = ctx.match[1];
     ctx.session.adminAction = 'set_price';
     ctx.session.betType = betType;
+    ctx.session.priceStep = 1; // paso 1: monto CUP
     await ctx.reply(
-        `Configurando <b>${betType}</b>\n` +
-        `Envía en el formato: <code>&lt;costo_cup&gt; &lt;costo_usd&gt; &lt;multiplicador&gt;</code>\n` +
-        `Ejemplo: <code>70 0.20 500</code>`,
+        `⚙️ Configurando <b>${betType}</b>\n\n` +
+        `Paso 1/3: Ingresa el <b>monto mínimo en CUP</b> para esta jugada.\n` +
+        `Ejemplo: <code>70</code>`,
         { parse_mode: 'HTML' }
     );
     await ctx.answerCbQuery();
 });
 
+// ========== ADMIN: VER DATOS ==========
 bot.action('adm_view', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const rate = await getExchangeRate();
+    const minDep = await getMinDepositUSD();
+    const minWit = await getMinWithdrawUSD();
     const { data: depMethods } = await supabase.from('deposit_methods').select('*');
     const { data: witMethods } = await supabase.from('withdraw_methods').select('*');
     const { data: prices } = await supabase.from('play_prices').select('*');
 
-    let text = `💰 <b>Tasa:</b> 1 USD = ${rate} CUP\n\n📥 <b>Métodos DEPÓSITO:</b>\n`;
+    let text = `💰 <b>Tasa:</b> 1 USD = ${rate} CUP\n`;
+    text += `📥 <b>Mínimo depósito:</b> ${minDep} USD\n`;
+    text += `📤 <b>Mínimo retiro:</b> ${minWit} USD\n\n`;
+    text += `📥 <b>Métodos DEPÓSITO:</b>\n`;
     depMethods?.forEach(m => text += `  ID ${m.id}: ${escapeHTML(m.name)} - ${escapeHTML(m.card)} / ${escapeHTML(m.confirm)}\n`);
     text += `\n📤 <b>Métodos RETIRO:</b>\n`;
     witMethods?.forEach(m => text += `  ID ${m.id}: ${escapeHTML(m.name)} - ${escapeHTML(m.card)} / ${escapeHTML(m.confirm)}\n`);
@@ -957,7 +1044,7 @@ bot.action(/publish_win_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== PROCESAR NÚMERO GANADOR ==========
+// ========== PROCESAR NÚMERO GANADOR (con soporte D/T) ==========
 async function processWinningNumber(sessionId, winningStr, ctx) {
     winningStr = winningStr.replace(/\s+/g, '');
     if (!/^\d{7}$/.test(winningStr)) {
@@ -1196,28 +1283,88 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // Configurar precio y multiplicador
-        if (session.adminAction === 'set_price') {
-            const parts = text.split(' ');
-            if (parts.length < 3) {
-                await ctx.reply('❌ Formato inválido. Usa: <code>&lt;cup&gt; &lt;usd&gt; &lt;multiplier&gt;</code>', { parse_mode: 'HTML' });
+        // Configurar mínimo depósito
+        if (session.adminAction === 'set_min_deposit') {
+            const value = parseFloat(text.replace(',', '.'));
+            if (isNaN(value) || value <= 0) {
+                await ctx.reply('❌ Número inválido. Envía un número positivo.');
                 return;
             }
-            const cup = parseFloat(parts[0].replace(',', '.'));
-            const usd = parseFloat(parts[1].replace(',', '.'));
-            const multiplier = parseFloat(parts[2].replace(',', '.'));
-            if (isNaN(cup) || isNaN(usd) || isNaN(multiplier) || cup < 0 || usd < 0 || multiplier < 0) {
-                await ctx.reply('❌ Montos o multiplicador inválidos.');
-                return;
-            }
-            await supabase
-                .from('play_prices')
-                .update({ amount_cup: cup, amount_usd: usd, payout_multiplier: multiplier, updated_at: new Date() })
-                .eq('bet_type', session.betType);
-            await ctx.reply(`✅ Precio para <b>${session.betType}</b> actualizado: ${cup} CUP / ${usd} USD  (x${multiplier})`, { parse_mode: 'HTML' });
+            await setMinDepositUSD(value);
+            await ctx.reply(`✅ Mínimo de depósito actualizado: ${value} USD`, { parse_mode: 'HTML' });
             delete session.adminAction;
-            delete session.betType;
             return;
+        }
+
+        // Configurar mínimo retiro
+        if (session.adminAction === 'set_min_withdraw') {
+            const value = parseFloat(text.replace(',', '.'));
+            if (isNaN(value) || value <= 0) {
+                await ctx.reply('❌ Número inválido. Envía un número positivo.');
+                return;
+            }
+            await setMinWithdrawUSD(value);
+            await ctx.reply(`✅ Mínimo de retiro actualizado: ${value} USD`, { parse_mode: 'HTML' });
+            delete session.adminAction;
+            return;
+        }
+
+        // Configurar precio (nuevo flujo paso a paso)
+        if (session.adminAction === 'set_price') {
+            if (session.priceStep === 1) {
+                // Recibimos monto CUP
+                const cup = parseFloat(text.replace(',', '.'));
+                if (isNaN(cup) || cup < 0) {
+                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo.');
+                    return;
+                }
+                session.priceTempCup = cup;
+                session.priceStep = 2;
+                await ctx.reply(
+                    `Paso 2/3: Ingresa el <b>monto mínimo en USD</b> para esta jugada.\n` +
+                    `Ejemplo: <code>0.20</code>`,
+                    { parse_mode: 'HTML' }
+                );
+                return;
+            } else if (session.priceStep === 2) {
+                const usd = parseFloat(text.replace(',', '.'));
+                if (isNaN(usd) || usd < 0) {
+                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo.');
+                    return;
+                }
+                session.priceTempUsd = usd;
+                session.priceStep = 3;
+                await ctx.reply(
+                    `Paso 3/3: Ingresa el <b>multiplicador de premio</b> (ej: 500 para pagar 500 veces lo apostado).\n` +
+                    `Ejemplo: <code>500</code>`,
+                    { parse_mode: 'HTML' }
+                );
+                return;
+            } else if (session.priceStep === 3) {
+                const multiplier = parseFloat(text.replace(',', '.'));
+                if (isNaN(multiplier) || multiplier < 0) {
+                    await ctx.reply('❌ Multiplicador inválido. Debe ser un número positivo.');
+                    return;
+                }
+                // Guardar en base de datos
+                const betType = session.betType;
+                await supabase
+                    .from('play_prices')
+                    .update({
+                        amount_cup: session.priceTempCup,
+                        amount_usd: session.priceTempUsd,
+                        payout_multiplier: multiplier,
+                        updated_at: new Date()
+                    })
+                    .eq('bet_type', betType);
+                await ctx.reply(`✅ Precio para <b>${betType}</b> actualizado: ${session.priceTempCup} CUP / ${session.priceTempUsd} USD  (x${multiplier})`, { parse_mode: 'HTML' });
+                delete session.adminAction;
+                delete session.priceStep;
+                delete session.priceTempCup;
+                delete session.priceTempUsd;
+                delete session.betType;
+                return;
+            }
         }
 
         // Publicar números ganadores
@@ -1241,6 +1388,14 @@ bot.on(message('text'), async (ctx) => {
         if (!buffer) {
             await ctx.reply('❌ Error: no se encontró la captura. Comienza de nuevo.', getMainKeyboard(ctx));
             delete session.awaitingDepositAmount;
+            return;
+        }
+
+        // Validar monto mínimo
+        const { usd } = parseAmount(amountText);
+        const minDeposit = await getMinDepositUSD();
+        if (usd < minDeposit) {
+            await ctx.reply(`❌ El monto mínimo de depósito es ${minDeposit} USD. Por favor, envía un monto válido.`, getMainKeyboard(ctx));
             return;
         }
 
@@ -1278,8 +1433,9 @@ bot.on(message('text'), async (ctx) => {
     if (session.awaitingWithdrawAccount) {
         const account = text;
         const amount = parseFloat(user.usd);
-        if (amount < 1) {
-            await ctx.reply('❌ No tienes saldo USD suficiente para retirar.', getMainKeyboard(ctx));
+        const minWithdraw = await getMinWithdrawUSD();
+        if (amount < minWithdraw) {
+            await ctx.reply(`❌ No tienes saldo USD suficiente para retirar. Mínimo requerido: ${minWithdraw} USD.`, getMainKeyboard(ctx));
             delete session.awaitingWithdrawAccount;
             delete session.withdrawMethod;
             return;
@@ -1507,12 +1663,15 @@ bot.on(message('photo'), async (ctx) => {
     const session = ctx.session;
 
     if (session.awaitingDepositPhoto) {
+        // Obtener la foto de mayor resolución
         const photo = ctx.message.photo.pop();
         const fileId = photo.file_id;
         const fileLink = await ctx.telegram.getFileLink(fileId);
+        // Descargar el archivo
         const response = await axios({ url: fileLink.href, responseType: 'arraybuffer' });
         const buffer = Buffer.from(response.data, 'binary');
 
+        // Guardar en sesión
         session.depositPhotoBuffer = buffer;
         delete session.awaitingDepositPhoto;
         session.awaitingDepositAmount = true;
@@ -1521,6 +1680,7 @@ bot.on(message('photo'), async (ctx) => {
         return;
     }
 
+    // Si no se esperaba foto, responder con menú
     await ctx.reply('No se esperaba una foto. Usa los botones del menú.', getMainKeyboard(ctx));
 });
 
@@ -1689,6 +1849,40 @@ bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
         await ctx.answerCbQuery('❌ Error al rechazar', { show_alert: true });
     }
 });
+
+// ========== CIERRE AUTOMÁTICO DE SESIONES ==========
+async function closeExpiredSessions() {
+    try {
+        const now = new Date().toISOString();
+        const { data: expiredSessions } = await supabase
+            .from('lottery_sessions')
+            .select('*')
+            .eq('status', 'open')
+            .lt('end_time', now);
+
+        for (const session of expiredSessions || []) {
+            await supabase
+                .from('lottery_sessions')
+                .update({ status: 'closed', updated_at: new Date() })
+                .eq('id', session.id);
+
+            // Broadcast de cierre automático
+            await broadcastToAllUsers(
+                `⏰ <b>SESIÓN CERRADA AUTOMÁTICAMENTE</b>\n\n` +
+                `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
+                `📅 Fecha: ${session.date}\n\n` +
+                `❌ El tiempo para apostar ha finalizado.\n` +
+                `🔢 Pronto se publicará el número ganador. ¡Gracias por participar!`
+            );
+        }
+    } catch (e) {
+        console.error('Error cerrando sesiones:', e);
+    }
+}
+
+cron.schedule('* * * * *', () => {
+    closeExpiredSessions();
+}, { timezone: TIMEZONE });
 
 // ========== EXPORTAR BOT ==========
 module.exports = bot;
