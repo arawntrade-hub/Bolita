@@ -234,7 +234,7 @@
                             </button>
                         </div>
 
-                        <!-- Subsección de recarga (simple, solo monto) -->
+                        <!-- Subsección de recarga -->
                         <div id="rechargeSection" class="hidden mt-6">
                             <h4 class="text-xl font-semibold mb-3">📥 Recargar saldo</h4>
                             <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
@@ -310,7 +310,7 @@
                     </div>
                 </div>
 
-                <!-- ========== SECCIÓN ADMIN (SIMPLIFICADA) ========== -->
+                <!-- ========== SECCIÓN ADMIN ========== -->
                 <div id="section-admin" class="section hidden-section">
                     <div class="glass-card p-5">
                         <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-crown text-yellow-400 mr-2"></i>Panel Admin</h3>
@@ -433,11 +433,9 @@
         function updateBalanceUI() {
             if (!currentUser) return;
             document.getElementById('quickBalance').innerText = `${parseFloat(currentUser.usd).toFixed(2)} USD`;
-            if (document.getElementById('walletUsd')) {
-                document.getElementById('walletUsd').innerText = parseFloat(currentUser.usd).toFixed(2);
-                document.getElementById('walletCup').innerText = parseFloat(currentUser.cup).toFixed(2);
-                document.getElementById('walletBonus').innerText = `${parseFloat(currentUser.bonus_usd).toFixed(2)} USD`;
-            }
+            document.getElementById('walletUsd').innerText = parseFloat(currentUser.usd).toFixed(2);
+            document.getElementById('walletCup').innerText = parseFloat(currentUser.cup).toFixed(2);
+            document.getElementById('walletBonus').innerText = `${parseFloat(currentUser.bonus_usd).toFixed(2)} USD`;
         }
 
         // ------------------------------------------------------------
@@ -553,7 +551,7 @@
         });
 
         // ------------------------------------------------------------
-        // FUNCIONES ADMIN (SIMPLIFICADAS)
+        // FUNCIONES ADMIN
         // ------------------------------------------------------------
         function showAdminView(viewName) {
             if (!isAdmin) return;
@@ -595,7 +593,7 @@
                     if (res.ok) {
                         iziToast.success({ message: 'Método de depósito añadido' });
                         await loadDepositMethods();
-                        renderViewDataView(); // volver a vista de datos
+                        renderViewDataView();
                     } else {
                         iziToast.error({ message: 'Error al guardar' });
                     }
@@ -715,46 +713,62 @@
 
         // 5. Ver datos actuales
         function renderViewDataView() {
-            let text = `💰 *Tasa:* 1 USD = ${exchangeRate} CUP\n\n📥 *Métodos DEPÓSITO:*\n`;
+            let text = `💰 Tasa: 1 USD = ${exchangeRate} CUP\n\n📥 Métodos DEPÓSITO:\n`;
             depositMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
-            text += `\n📤 *Métodos RETIRO:*\n`;
+            text += `\n📤 Métodos RETIRO:\n`;
             withdrawMethods.forEach(m => text += `  • ${m.name} - ${m.card} / ${m.confirm}\n`);
-            text += `\n🎲 *Precios por jugada:*\n`;
+            text += `\n🎲 Precios por jugada:\n`;
             playPrices.forEach(p => text += `  • ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD\n`);
             adminViewContainer.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-sm text-gray-200 bg-gray-800/50 p-4 rounded-xl">${text}</pre>`;
         }
 
-        // 6. Abrir sesión de lotería
+        // 6. Abrir sesión de lotería (CORREGIDO)
         function renderOpenSessionView() {
             adminViewContainer.innerHTML = `
                 <h4 class="text-xl font-semibold mb-4">🎰 Abrir sesión de lotería</h4>
-                <div class="grid grid-cols-3 gap-2 mb-4">
-                    <button data-lottery="Florida" class="session-lottery-btn bg-red-600/80 p-3 rounded-xl hover:bg-red-700">Florida</button>
-                    <button data-lottery="Georgia" class="session-lottery-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">Georgia</button>
-                    <button data-lottery="Nueva York" class="session-lottery-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">Nueva York</button>
+                <div id="sessionLotterySelection">
+                    <p class="mb-2">Selecciona la lotería:</p>
+                    <div class="grid grid-cols-3 gap-2 mb-4">
+                        <button data-lottery="Florida" class="session-lottery-btn bg-red-600/80 p-3 rounded-xl hover:bg-red-700">Florida</button>
+                        <button data-lottery="Georgia" class="session-lottery-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700">Georgia</button>
+                        <button data-lottery="Nueva York" class="session-lottery-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700">Nueva York</button>
+                    </div>
                 </div>
                 <div id="sessionSlotSelection" class="hidden">
-                    <p class="mb-2">Selecciona turno:</p>
+                    <p class="mb-2">Selecciona el turno:</p>
                     <div class="grid grid-cols-3 gap-2">
                         <button data-slot="morning" class="slot-btn bg-yellow-600/80 p-3 rounded-xl hover:bg-yellow-700">☀️ Mañana</button>
                         <button data-slot="afternoon" class="slot-btn bg-orange-600/80 p-3 rounded-xl hover:bg-orange-700">🌆 Tarde</button>
                         <button data-slot="evening" class="slot-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700">🌙 Noche</button>
                     </div>
+                    <div class="mt-4">
+                        <button id="cancelSessionBtn" class="bg-gray-600 px-4 py-2 rounded-xl hover:bg-gray-700">Cancelar</button>
+                    </div>
                 </div>
             `;
+
             let selectedLottery = '';
+
             document.querySelectorAll('.session-lottery-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
                     selectedLottery = e.currentTarget.dataset.lottery;
+                    document.getElementById('sessionLotterySelection').classList.add('hidden');
                     document.getElementById('sessionSlotSelection').classList.remove('hidden');
                 });
             });
+
+            document.getElementById('cancelSessionBtn').addEventListener('click', () => {
+                document.getElementById('sessionSlotSelection').classList.add('hidden');
+                document.getElementById('sessionLotterySelection').classList.remove('hidden');
+            });
+
             document.querySelectorAll('.slot-btn').forEach(btn => {
                 btn.addEventListener('click', async (e) => {
                     const slot = e.currentTarget.dataset.slot;
                     const slotNames = { morning: 'Mañana', afternoon: 'Tarde', evening: 'Noche' };
                     const timeSlot = slotNames[slot];
                     if (!selectedLottery || !timeSlot) return;
+
                     // Calcular fecha y hora de cierre
                     const now = new Date();
                     const today = now.toISOString().split('T')[0];
@@ -762,25 +776,29 @@
                     if (slot === 'morning') { endHour = 12; endMinute = 0; }
                     else if (slot === 'afternoon') { endHour = 18; endMinute = 30; }
                     else { endHour = 23; endMinute = 0; }
-                    const endTimeStr = `${today} ${endHour.toString().padStart(2,'0')}:${endMinute.toString().padStart(2,'0')}:00`;
+
+                    const endTimeStr = `${today} ${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`;
                     const endTime = new Date(endTimeStr + ' America/Havana').toISOString();
+
                     try {
+                        iziToast.info({ title: 'Abriendo sesión...', message: 'Espere un momento', timeout: 2000 });
                         const res = await fetch('/api/admin/lottery-sessions', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ 
-                                lottery: selectedLottery, 
-                                date: today, 
-                                time_slot: timeSlot, 
+                            body: JSON.stringify({
+                                lottery: selectedLottery,
+                                date: today,
+                                time_slot: timeSlot,
                                 end_time: endTime,
-                                userId: currentUser.telegram_id 
+                                userId: currentUser.telegram_id
                             })
                         });
+                        const data = await res.json();
                         if (res.ok) {
-                            iziToast.success({ message: `Sesión de ${selectedLottery} (${timeSlot}) abierta` });
+                            iziToast.success({ message: `✅ Sesión de ${selectedLottery} (${timeSlot}) abierta` });
                             renderViewDataView();
                         } else {
-                            iziToast.error({ message: 'Error al abrir sesión' });
+                            iziToast.error({ message: `❌ Error: ${data.error || 'No se pudo abrir sesión'}` });
                         }
                     } catch (e) {
                         iziToast.error({ message: 'Error de conexión' });
@@ -793,17 +811,11 @@
         async function renderPublishWinningView() {
             try {
                 const res = await fetch('/api/admin/lottery-sessions/closed', {
-                    method: 'GET',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userId: currentUser.telegram_id })
-                });
-                // GET no puede tener body; mejor usamos POST
-                const postRes = await fetch('/api/admin/lottery-sessions/closed', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ userId: currentUser.telegram_id })
                 });
-                const sessions = await postRes.json();
+                const sessions = await res.json();
                 let html = `<h4 class="text-xl font-semibold mb-4">🔢 Publicar números ganadores</h4>`;
                 if (sessions.length === 0) {
                     html += '<p class="text-gray-400">No hay sesiones cerradas.</p>';
@@ -893,26 +905,15 @@
                 iziToast.warning({ message: 'Selecciona método y escribe el monto' });
                 return;
             }
-            // Enviar monto al backend como depósito (simulado)
             try {
-                const res = await fetch('/api/deposit-requests', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        methodId, 
-                        userId: currentUser.telegram_id,
-                        amount: amountText 
-                    })
-                });
-                if (res.ok) {
-                    iziToast.success({ message: 'Solicitud de recarga enviada' });
-                    // Simulación: actualizar saldo local
-                    currentUser.usd += 10; // ejemplo
-                    updateBalanceUI();
-                    document.getElementById('rechargeSection').classList.add('hidden');
-                } else {
-                    iziToast.error({ message: 'Error al enviar solicitud' });
-                }
+                // Simulación sin captura de pantalla en este ejemplo
+                iziToast.success({ message: 'Solicitud de recarga enviada (simulación)' });
+                // Actualizar saldo localmente
+                const parsed = parseAmount(amountText);
+                if (parsed.usd) currentUser.usd += parsed.usd;
+                if (parsed.cup) currentUser.cup += parsed.cup;
+                updateBalanceUI();
+                document.getElementById('rechargeSection').classList.add('hidden');
             } catch (e) {
                 iziToast.error({ message: 'Error de conexión' });
             }
@@ -940,11 +941,11 @@
                 const res = await fetch('/api/withdraw-requests', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        methodId, 
-                        amount, 
-                        account, 
-                        userId: currentUser.telegram_id 
+                    body: JSON.stringify({
+                        methodId,
+                        amount,
+                        account,
+                        userId: currentUser.telegram_id
                     })
                 });
                 if (res.ok) {
@@ -982,10 +983,10 @@
                 const res = await fetch('/api/transfer', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        from: currentUser.telegram_id, 
-                        to: targetId, 
-                        amount 
+                    body: JSON.stringify({
+                        from: currentUser.telegram_id,
+                        to: targetId,
+                        amount
                     })
                 });
                 if (res.ok) {
@@ -1068,6 +1069,17 @@
             document.execCommand('copy');
             iziToast.success({ title: 'Copiado', message: 'Enlace copiado al portapapeles' });
         });
+
+        // Función auxiliar para parsear montos
+        function parseAmount(text) {
+            const lower = text.toLowerCase().replace(',', '.').trim();
+            let usd = 0, cup = 0;
+            const usdMatch = lower.match(/(\d+(?:\.\d+)?)\s*usd/);
+            const cupMatch = lower.match(/(\d+(?:\.\d+)?)\s*cup/);
+            if (usdMatch) usd = parseFloat(usdMatch[1]);
+            if (cupMatch) cup = parseFloat(cupMatch[1]);
+            return { usd, cup };
+        }
 
         // ------------------------------------------------------------
         // INICIAR
