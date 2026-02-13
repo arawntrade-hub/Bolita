@@ -47,14 +47,13 @@ function escapeHTML(text) {
 
 async function safeEdit(ctx, text, keyboard = null) {
     try {
-        const escapedText = escapeHTML(text);
         if (ctx.callbackQuery) {
-            await ctx.editMessageText(escapedText, {
+            await ctx.editMessageText(text, {
                 parse_mode: 'HTML',
                 reply_markup: keyboard?.reply_markup
             });
         } else {
-            await ctx.reply(escapedText, {
+            await ctx.reply(text, {
                 parse_mode: 'HTML',
                 reply_markup: keyboard?.reply_markup
             });
@@ -62,7 +61,7 @@ async function safeEdit(ctx, text, keyboard = null) {
     } catch (err) {
         console.warn('Error en safeEdit, enviando nuevo mensaje:', err.message);
         try {
-            await ctx.reply(escapeHTML(text), {
+            await ctx.reply(text, {
                 parse_mode: 'HTML',
                 reply_markup: keyboard?.reply_markup
             });
