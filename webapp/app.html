@@ -94,6 +94,26 @@
             color: #10b981;
             font-weight: bold;
         }
+        .file-input {
+            background: #374151;
+            border: 1px solid #4b5563;
+            color: white;
+            padding: 8px;
+            border-radius: 12px;
+            width: 100%;
+        }
+        .file-input::file-selector-button {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        .file-input::file-selector-button:hover {
+            background: #1d4ed8;
+        }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -254,7 +274,7 @@
                             </button>
                         </div>
 
-                        <!-- Subsección de recarga -->
+                        <!-- Subsección de recarga (REAL) -->
                         <div id="rechargeSection" class="hidden mt-6">
                             <h4 class="text-xl font-semibold mb-3">📥 Recargar saldo</h4>
                             <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
@@ -264,10 +284,12 @@
                                 <p><span class="font-bold">Número:</span> <span id="methodCard"></span></p>
                                 <p><span class="font-bold">Confirmar:</span> <span id="methodConfirm"></span></p>
                             </div>
-                            <label class="block mb-2">💵 Envía el monto transferido (ej: 10 usd o 500 cup):</label>
+                            <label class="block mb-2 font-medium">📸 Sube captura de la transferencia:</label>
+                            <input type="file" id="depositScreenshot" accept="image/*" class="file-input mb-3">
+                            <label class="block mb-2">💵 Monto transferido (ej: 10 usd o 500 cup):</label>
                             <input type="text" id="depositAmount" placeholder="Ej: 10 usd" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
                             <button id="submitDepositBtn" class="w-full bg-green-600 py-2 rounded-xl font-semibold hover:bg-green-700" disabled>
-                                Confirmar depósito
+                                Enviar solicitud
                             </button>
                         </div>
 
@@ -706,6 +728,184 @@
             }
         });
 
+        // ========== FUNCIONES DE RECARGA REAL (con captura) ==========
+        document.getElementById('rechargeBtn').addEventListener('click', () => {
+            document.getElementById('rechargeSection').classList.toggle('hidden');
+            document.getElementById('withdrawSection').classList.add('hidden');
+            document.getElementById('transferSection').classList.add('hidden');
+        });
+
+        document.getElementById('depositMethodSelect').addEventListener('change', async (e) => {
+            const methodId = e.target.value;
+            if (!methodId) {
+                document.getElementById('methodDetails').classList.add('hidden');
+                document.getElementById('submitDepositBtn').disabled = true;
+                return;
+            }
+            try {
+                const res = await fetch(`/api/deposit-methods/${methodId}`);
+                const method = await res.json();
+                document.getElementById('methodCard').innerText = method.card;
+                document.getElementById('methodConfirm').innerText = method.confirm;
+                document.getElementById('methodDetails').classList.remove('hidden');
+                // Habilitar botón solo si hay archivo y monto
+                checkDepositForm();
+            } catch (e) {
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar método' });
+            }
+        });
+
+        document.getElementById('depositScreenshot').addEventListener('change', checkDepositForm);
+        document.getElementById('depositAmount').addEventListener('input', checkDepositForm);
+
+        function checkDepositForm() {
+            const method = document.getElementById('depositMethodSelect').value;
+            const file = document.getElementById('depositScreenshot').files[0];
+            const amount = document.getElementById('depositAmount').value.trim();
+            document.getElementById('submitDepositBtn').disabled = !(method && file && amount);
+        }
+
+        document.getElementById('submitDepositBtn').addEventListener('click', async () => {
+            const methodId = document.getElementById('depositMethodSelect').value;
+            const file = document.getElementById('depositScreenshot').files[0];
+            const amount = document.getElementById('depositAmount').value.trim();
+
+            if (!methodId || !file || !amount) {
+                iziToast.warning({ message: 'Completa todos los campos' });
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('methodId', methodId);
+            formData.append('userId', currentUser.telegram_id);
+            formData.append('amount', amount);
+            formData.append('screenshot', file);
+
+            try {
+                const res = await fetch('/api/deposit-requests', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    iziToast.success({ message: '✅ Solicitud enviada. Espera la aprobación.' });
+                    // Limpiar formulario
+                    document.getElementById('depositMethodSelect').value = '';
+                    document.getElementById('methodDetails').classList.add('hidden');
+                    document.getElementById('depositScreenshot').value = '';
+                    document.getElementById('depositAmount').value = '';
+                    document.getElementById('submitDepositBtn').disabled = true;
+                    document.getElementById('rechargeSection').classList.add('hidden');
+                } else {
+                    iziToast.error({ message: data.error || 'Error al enviar solicitud' });
+                }
+            } catch (e) {
+                console.error(e);
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        });
+
+        // ========== RETIRO ==========
+        document.getElementById('withdrawBtn').addEventListener('click', () => {
+            document.getElementById('withdrawSection').classList.toggle('hidden');
+            document.getElementById('rechargeSection').classList.add('hidden');
+            document.getElementById('transferSection').classList.add('hidden');
+        });
+
+        document.getElementById('submitWithdrawBtn').addEventListener('click', async () => {
+            const methodId = document.getElementById('withdrawMethodSelect').value;
+            const account = document.getElementById('withdrawAccount').value.trim();
+            if (!methodId || !account) {
+                iziToast.warning({ message: 'Selecciona método y escribe la cuenta' });
+                return;
+            }
+            const amount = parseFloat(currentUser.usd);
+            if (amount < 1) {
+                iziToast.error({ message: 'Saldo insuficiente (mínimo 1 USD)' });
+                return;
+            }
+            try {
+                const res = await fetch('/api/withdraw-requests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        methodId,
+                        amount,
+                        account,
+                        userId: currentUser.telegram_id
+                    })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Solicitud de retiro enviada' });
+                    currentUser.usd -= amount;
+                    updateBalanceUI();
+                    document.getElementById('withdrawSection').classList.add('hidden');
+                    document.getElementById('withdrawAccount').value = '';
+                    document.getElementById('withdrawMethodSelect').value = '';
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al solicitar retiro' });
+                }
+            } catch (e) {
+                console.error(e);
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        });
+
+        // ========== TRANSFERENCIA ==========
+        document.getElementById('transferBtn').addEventListener('click', () => {
+            document.getElementById('transferSection').classList.toggle('hidden');
+            document.getElementById('rechargeSection').classList.add('hidden');
+            document.getElementById('withdrawSection').classList.add('hidden');
+        });
+
+        document.getElementById('submitTransferBtn').addEventListener('click', async () => {
+            const targetId = parseInt(document.getElementById('transferTarget').value);
+            const amount = parseFloat(document.getElementById('transferAmount').value);
+            if (!targetId || !amount || amount <= 0) {
+                iziToast.warning({ message: 'ID y monto válidos requeridos' });
+                return;
+            }
+            if (amount > parseFloat(currentUser.usd)) {
+                iziToast.error({ message: 'Saldo insuficiente' });
+                return;
+            }
+            try {
+                const res = await fetch('/api/transfer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        from: currentUser.telegram_id,
+                        to: targetId,
+                        amount
+                    })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: `Transferencia de ${amount} USD a ${targetId} exitosa` });
+                    currentUser.usd -= amount;
+                    updateBalanceUI();
+                    document.getElementById('transferSection').classList.add('hidden');
+                    document.getElementById('transferTarget').value = '';
+                    document.getElementById('transferAmount').value = '';
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error en la transferencia' });
+                }
+            } catch (e) {
+                console.error(e);
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        });
+
+        // ========== REFERIDOS: COPIAR ENLACE ==========
+        document.getElementById('copyLinkBtn').addEventListener('click', () => {
+            const link = document.getElementById('referralLink');
+            link.select();
+            document.execCommand('copy');
+            iziToast.success({ title: 'Copiado', message: 'Enlace copiado al portapapeles' });
+        });
+
         // ========== FUNCIONES ADMIN ==========
         function showAdminView(viewName) {
             if (!isAdmin) return;
@@ -812,7 +1012,6 @@
                 }
             } else {
                 try {
-                    // Crear nueva sesión
                     const res = await fetch('/api/admin/lottery-sessions', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -839,7 +1038,6 @@
         // ========== PUBLICAR GANADORES ==========
         async function renderPublishWinningView() {
             try {
-                // Obtener TODAS las sesiones cerradas
                 const res = await fetch('/api/admin/lottery-sessions/closed', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -847,7 +1045,6 @@
                 });
                 const sessions = await res.json();
 
-                // Obtener números ya publicados para saber cuáles están listos
                 const pubRes = await fetch('/api/winning-numbers');
                 const published = await pubRes.json();
                 const publishedSet = new Set(published.map(p => `${p.lottery}|${p.date}|${p.time_slot}`));
@@ -893,7 +1090,6 @@
             }
         }
 
-        // ========== MOSTRAR GANADORES EN MODAL ==========
         window.showWinners = async function(sessionId) {
             try {
                 const res = await fetch(`/api/admin/winning-numbers/${sessionId}/winners?userId=${currentUser.telegram_id}`);
@@ -1155,153 +1351,12 @@
             }
         }
 
-        // ========== EVENTOS DE ADMIN ==========
         adminNavBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
                 const view = e.currentTarget.dataset.adminView;
                 showAdminView(view);
             });
-        });
-
-        // ========== EVENTOS DE USUARIO (RECARGAS, RETIROS, TRANSFERENCIAS) ==========
-        document.getElementById('rechargeBtn').addEventListener('click', () => {
-            document.getElementById('rechargeSection').classList.toggle('hidden');
-            document.getElementById('withdrawSection').classList.add('hidden');
-            document.getElementById('transferSection').classList.add('hidden');
-        });
-
-        document.getElementById('depositMethodSelect').addEventListener('change', async (e) => {
-            const methodId = e.target.value;
-            if (!methodId) {
-                document.getElementById('methodDetails').classList.add('hidden');
-                document.getElementById('submitDepositBtn').disabled = true;
-                return;
-            }
-            try {
-                const res = await fetch(`/api/deposit-methods/${methodId}`);
-                const method = await res.json();
-                document.getElementById('methodCard').innerText = method.card;
-                document.getElementById('methodConfirm').innerText = method.confirm;
-                document.getElementById('methodDetails').classList.remove('hidden');
-                document.getElementById('submitDepositBtn').disabled = false;
-            } catch (e) {
-                console.error(e);
-                iziToast.error({ message: 'Error al cargar método' });
-            }
-        });
-
-        document.getElementById('submitDepositBtn').addEventListener('click', async () => {
-            const methodId = document.getElementById('depositMethodSelect').value;
-            const amountText = document.getElementById('depositAmount').value.trim();
-            if (!methodId || !amountText) {
-                iziToast.warning({ message: 'Selecciona método y escribe el monto' });
-                return;
-            }
-            iziToast.success({ message: 'Solicitud de recarga enviada (simulado)' });
-            document.getElementById('rechargeSection').classList.add('hidden');
-            document.getElementById('depositAmount').value = '';
-            document.getElementById('depositMethodSelect').value = '';
-            document.getElementById('methodDetails').classList.add('hidden');
-            document.getElementById('submitDepositBtn').disabled = true;
-        });
-
-        document.getElementById('withdrawBtn').addEventListener('click', () => {
-            document.getElementById('withdrawSection').classList.toggle('hidden');
-            document.getElementById('rechargeSection').classList.add('hidden');
-            document.getElementById('transferSection').classList.add('hidden');
-        });
-
-        document.getElementById('submitWithdrawBtn').addEventListener('click', async () => {
-            const methodId = document.getElementById('withdrawMethodSelect').value;
-            const account = document.getElementById('withdrawAccount').value.trim();
-            if (!methodId || !account) {
-                iziToast.warning({ message: 'Selecciona método y escribe la cuenta' });
-                return;
-            }
-            const amount = parseFloat(currentUser.usd);
-            if (amount < 1) {
-                iziToast.error({ message: 'Saldo insuficiente (mínimo 1 USD)' });
-                return;
-            }
-            try {
-                const res = await fetch('/api/withdraw-requests', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        methodId,
-                        amount,
-                        account,
-                        userId: currentUser.telegram_id
-                    })
-                });
-                if (res.ok) {
-                    iziToast.success({ message: 'Solicitud de retiro enviada' });
-                    currentUser.usd -= amount;
-                    updateBalanceUI();
-                    document.getElementById('withdrawSection').classList.add('hidden');
-                    document.getElementById('withdrawAccount').value = '';
-                    document.getElementById('withdrawMethodSelect').value = '';
-                } else {
-                    const err = await res.json();
-                    iziToast.error({ message: err.error || 'Error al solicitar retiro' });
-                }
-            } catch (e) {
-                console.error(e);
-                iziToast.error({ message: 'Error de conexión' });
-            }
-        });
-
-        document.getElementById('transferBtn').addEventListener('click', () => {
-            document.getElementById('transferSection').classList.toggle('hidden');
-            document.getElementById('rechargeSection').classList.add('hidden');
-            document.getElementById('withdrawSection').classList.add('hidden');
-        });
-
-        document.getElementById('submitTransferBtn').addEventListener('click', async () => {
-            const targetId = parseInt(document.getElementById('transferTarget').value);
-            const amount = parseFloat(document.getElementById('transferAmount').value);
-            if (!targetId || !amount || amount <= 0) {
-                iziToast.warning({ message: 'ID y monto válidos requeridos' });
-                return;
-            }
-            if (amount > parseFloat(currentUser.usd)) {
-                iziToast.error({ message: 'Saldo insuficiente' });
-                return;
-            }
-            try {
-                const res = await fetch('/api/transfer', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        from: currentUser.telegram_id,
-                        to: targetId,
-                        amount
-                    })
-                });
-                if (res.ok) {
-                    iziToast.success({ message: `Transferencia de ${amount} USD a ${targetId} exitosa` });
-                    currentUser.usd -= amount;
-                    updateBalanceUI();
-                    document.getElementById('transferSection').classList.add('hidden');
-                    document.getElementById('transferTarget').value = '';
-                    document.getElementById('transferAmount').value = '';
-                } else {
-                    const err = await res.json();
-                    iziToast.error({ message: err.error || 'Error en la transferencia' });
-                }
-            } catch (e) {
-                console.error(e);
-                iziToast.error({ message: 'Error de conexión' });
-            }
-        });
-
-        // ========== REFERIDOS: COPIAR ENLACE ==========
-        document.getElementById('copyLinkBtn').addEventListener('click', () => {
-            const link = document.getElementById('referralLink');
-            link.select();
-            document.execCommand('copy');
-            iziToast.success({ title: 'Copiado', message: 'Enlace copiado al portapapeles' });
         });
 
         // ========== FUNCIONES AUXILIARES ==========
