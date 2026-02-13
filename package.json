@@ -1,27 +1,33 @@
 {
   "name": "rifas-cuba-bot",
-  "version": "1.0.0",
-  "description": "Bot de Telegram + WebApp para rifas en Cuba",
-  "main": "backend.js",
+  "version": "2.0.0",
+  "description": "Bot de Telegram + WebApp para gestión de rifas y loterías en Cuba",
+  "main": "index.js",
   "scripts": {
-    "start": "node backend.js",
-    "dev": "nodemon backend.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
-  "keywords": ["telegram", "bot", "cuba", "rifas", "webapp"],
-  "author": "Tu nombre",
+  "keywords": [
+    "telegram",
+    "bot",
+    "lotería",
+    "cuba",
+    "webapp",
+    "supabase"
+  ],
+  "author": "Rifas Cuba",
   "license": "ISC",
   "dependencies": {
-    "@supabase/supabase-js": "^2.39.0",
-    "axios": "^1.6.2",
+    "@supabase/supabase-js": "^2.39.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "multer": "^1.4.5-lts.1",
+    "moment-timezone": "^0.5.45",
     "node-cron": "^3.0.3",
     "telegraf": "^4.15.3",
-    "telegraf-session-local": "^2.1.0"
+    "telegraf-session-local": "^2.1.1"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.1"
   }
 }
