@@ -1,6 +1,6 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión final con soporte para jugadas D (decenas) y T (terminales)
+// Versión final con soporte para D/T, depósitos con captura, y menú persistente
 // ==============================
 
 require('dotenv').config();
@@ -10,6 +10,7 @@ const LocalSession = require('telegraf-session-local');
 const { createClient } = require('@supabase/supabase-js');
 const cron = require('node-cron');
 const moment = require('moment-timezone');
+const axios = require('axios');
 
 // ========== CONFIGURACIÓN DESDE .ENV ==========
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -123,27 +124,20 @@ function parseBetLine(line, betType) {
     let montoReal = montoBase;
     let numeroGuardado = numero;
 
-    // Validar según el tipo de jugada
     if (betType === 'fijo') {
-        // Patrones normales de 2 dígitos
         if (/^\d{2}$/.test(numero)) {
-            // válido
+            // normal
         } else if (/^[Dd](\d)$/.test(numero)) {
-            // Decena: D2 significa todos los números que empiezan con 2 (20-29)
-            // Se multiplica el monto por 10 porque son 10 números
             montoReal = montoBase * 10;
-            numeroGuardado = numero.toUpperCase(); // guardamos como D2
+            numeroGuardado = numero.toUpperCase();
         } else if (/^[Tt](\d)$/.test(numero)) {
-            // Terminal: T5 significa todos los números que terminan con 5 (05,15,...,95)
             montoReal = montoBase * 10;
-            numeroGuardado = numero.toUpperCase(); // guardamos como T5
+            numeroGuardado = numero.toUpperCase();
         } else {
             return null;
         }
     } else if (betType === 'corridos') {
-        if (!/^\d{2}$/.test(numero) && !/^[DdTt]\d$/.test(numero)) return null;
-        // En corridos no aplica multiplicación especial, pero aceptamos D y T? Por ahora solo números normales
-        if (!/^\d{2}$/.test(numero)) return null; // solo números de 2 dígitos
+        if (!/^\d{2}$/.test(numero)) return null;
     } else if (betType === 'centena') {
         if (!/^\d{3}$/.test(numero)) return null;
     } else if (betType === 'parle') {
@@ -195,7 +189,7 @@ function getEndTimeFromSlot(timeSlot) {
     return endTime.toDate();
 }
 
-// ========== FUNCIÓN DE BROADCAST (con delay) ==========
+// ========== FUNCIÓN DE BROADCAST GLOBAL ==========
 async function broadcastToAllUsers(message, parseMode = 'HTML') {
     const { data: users } = await supabase
         .from('users')
@@ -204,11 +198,104 @@ async function broadcastToAllUsers(message, parseMode = 'HTML') {
     for (const u of users || []) {
         try {
             await bot.telegram.sendMessage(u.telegram_id, message, { parse_mode: parseMode });
-            await new Promise(resolve => setTimeout(resolve, 30)); // evitar flood
+            await new Promise(resolve => setTimeout(resolve, 30));
         } catch (e) {
             console.warn(`Error enviando broadcast a ${u.telegram_id}:`, e.message);
         }
     }
+}
+
+// ========== FUNCIÓN PARA CREAR SOLICITUD DE DEPÓSITO ==========
+async function createDepositRequest(userId, methodId, fileBuffer, amountText) {
+    const fileName = `deposit_${userId}_${Date.now()}.jpg`;
+    const filePath = `deposits/${fileName}`;
+
+    const { error: uploadError } = await supabase.storage
+        .from('deposit-screenshots')
+        .upload(filePath, fileBuffer, { contentType: 'image/jpeg' });
+
+    if (uploadError) throw new Error('Error al subir captura');
+
+    const { data: { publicUrl } } = supabase.storage
+        .from('deposit-screenshots')
+        .getPublicUrl(filePath);
+
+    const { data: request, error: insertError } = await supabase
+        .from('deposit_requests')
+        .insert({
+            user_id: userId,
+            method_id: methodId,
+            screenshot_url: publicUrl,
+            amount: amountText,
+            status: 'pending'
+        })
+        .select()
+        .single();
+
+    if (insertError) throw insertError;
+
+    return request;
+}
+
+// ========== TECLADO PRINCIPAL (solo admin ve el botón admin) ==========
+function getMainKeyboard(ctx) {
+    const buttons = [
+        [Markup.button.callback('🎲 Jugar', 'play')],
+        [Markup.button.callback('💰 Mi dinero', 'my_money')],
+        [Markup.button.callback('📋 Mis jugadas', 'my_bets')],
+        [Markup.button.callback('👥 Referidos', 'referrals')],
+        [Markup.button.callback('❓ Cómo jugar', 'how_to_play')],
+        [Markup.button.webApp('🌐 Abrir WebApp', `${WEBAPP_URL}/app.html`)]
+    ];
+    if (ctx.from.id === ADMIN_ID) {
+        buttons.push([Markup.button.callback('🔧 Admin', 'admin_panel')]);
+    }
+    return Markup.inlineKeyboard(buttons);
+}
+
+function playLotteryKbd() {
+    const buttons = [
+        [Markup.button.callback('🦩 Florida', 'lot_florida')],
+        [Markup.button.callback('🍑 Georgia', 'lot_georgia')],
+        [Markup.button.callback('🗽 Nueva York', 'lot_newyork')],
+        [Markup.button.callback('◀ Volver', 'main')]
+    ];
+    return Markup.inlineKeyboard(buttons);
+}
+
+function playTypeKbd() {
+    const buttons = [
+        [Markup.button.callback('🎯 Fijo', 'type_fijo')],
+        [Markup.button.callback('🏃 Corridos', 'type_corridos')],
+        [Markup.button.callback('💯 Centena', 'type_centena')],
+        [Markup.button.callback('🔒 Parle', 'type_parle')],
+        [Markup.button.callback('◀ Volver', 'play')]
+    ];
+    return Markup.inlineKeyboard(buttons);
+}
+
+function myMoneyKbd() {
+    const buttons = [
+        [Markup.button.callback('📥 Recargar', 'recharge')],
+        [Markup.button.callback('📤 Retirar', 'withdraw')],
+        [Markup.button.callback('🔄 Transferir', 'transfer')],
+        [Markup.button.callback('◀ Volver', 'main')]
+    ];
+    return Markup.inlineKeyboard(buttons);
+}
+
+function adminPanelKbd() {
+    const buttons = [
+        [Markup.button.callback('🎰 Gestionar sesiones', 'admin_sessions')],
+        [Markup.button.callback('🔢 Publicar ganadores', 'admin_winning')],
+        [Markup.button.callback('➕ Añadir método DEPÓSITO', 'adm_add_dep')],
+        [Markup.button.callback('➕ Añadir método RETIRO', 'adm_add_wit')],
+        [Markup.button.callback('💰 Configurar tasa USD/CUP', 'adm_set_rate')],
+        [Markup.button.callback('🎲 Configurar precios y pagos', 'adm_set_prices')],
+        [Markup.button.callback('📋 Ver datos actuales', 'adm_view')],
+        [Markup.button.callback('◀ Menú principal', 'main')]
+    ];
+    return Markup.inlineKeyboard(buttons);
 }
 
 // ========== MIDDLEWARE: USUARIO ==========
@@ -224,73 +311,6 @@ bot.use(async (ctx, next) => {
     }
     return next();
 });
-
-// ========== TECLADOS REORGANIZADOS ==========
-function buildKeyboard(buttons, cols = 2) {
-    const rows = [];
-    for (let i = 0; i < buttons.length; i += cols) {
-        rows.push(buttons.slice(i, i + cols));
-    }
-    return Markup.inlineKeyboard(rows);
-}
-
-function mainMenuKbd() {
-    const buttons = [
-        Markup.button.callback('🎲 Jugar', 'play'),
-        Markup.button.callback('💰 Mi dinero', 'my_money'),
-        Markup.button.callback('📋 Mis jugadas', 'my_bets'),
-        Markup.button.callback('👥 Referidos', 'referrals'),
-        Markup.button.callback('❓ Cómo jugar', 'how_to_play'),
-        Markup.button.callback('🔧 Admin', 'admin_panel'),
-        Markup.button.webApp('🌐 Abrir WebApp', `${WEBAPP_URL}/app.html`)
-    ];
-    return buildKeyboard(buttons, 2);
-}
-
-function playLotteryKbd() {
-    const buttons = [
-        Markup.button.callback('🦩 Florida', 'lot_florida'),
-        Markup.button.callback('🍑 Georgia', 'lot_georgia'),
-        Markup.button.callback('🗽 Nueva York', 'lot_newyork'),
-        Markup.button.callback('◀ Volver', 'main')
-    ];
-    return buildKeyboard(buttons, 2);
-}
-
-function playTypeKbd() {
-    const buttons = [
-        Markup.button.callback('🎯 Fijo', 'type_fijo'),
-        Markup.button.callback('🏃 Corridos', 'type_corridos'),
-        Markup.button.callback('💯 Centena', 'type_centena'),
-        Markup.button.callback('🔒 Parle', 'type_parle'),
-        Markup.button.callback('◀ Volver', 'play')
-    ];
-    return buildKeyboard(buttons, 2);
-}
-
-function myMoneyKbd() {
-    const buttons = [
-        Markup.button.callback('📥 Recargar', 'recharge'),
-        Markup.button.callback('📤 Retirar', 'withdraw'),
-        Markup.button.callback('🔄 Transferir', 'transfer'),
-        Markup.button.callback('◀ Volver', 'main')
-    ];
-    return buildKeyboard(buttons, 2);
-}
-
-function adminPanelKbd() {
-    const buttons = [
-        Markup.button.callback('🎰 Gestionar sesiones', 'admin_sessions'),
-        Markup.button.callback('🔢 Publicar ganadores', 'admin_winning'),
-        Markup.button.callback('➕ Añadir método DEPÓSITO', 'adm_add_dep'),
-        Markup.button.callback('➕ Añadir método RETIRO', 'adm_add_wit'),
-        Markup.button.callback('💰 Configurar tasa USD/CUP', 'adm_set_rate'),
-        Markup.button.callback('🎲 Configurar precios y pagos', 'adm_set_prices'),
-        Markup.button.callback('📋 Ver datos actuales', 'adm_view'),
-        Markup.button.callback('◀ Menú principal', 'main')
-    ];
-    return buildKeyboard(buttons, 2);
-}
 
 // ========== COMANDO /start ==========
 bot.start(async (ctx) => {
@@ -313,7 +333,7 @@ bot.start(async (ctx) => {
         `Bienvenido de regreso a Rifas Cuba, tu asistente de la suerte 🍀\n\n` +
         `🎲 ¿Listo para jugar?\n` +
         `Apuesta, gana y disfruta. ¡La suerte está de tu lado!`,
-        mainMenuKbd()
+        getMainKeyboard(ctx)
     );
 });
 
@@ -324,7 +344,7 @@ bot.action('main', async (ctx) => {
         `Bienvenido de regreso a Rifas Cuba, tu asistente de la suerte 🍀\n\n` +
         `🎲 ¿Listo para jugar?\n` +
         `Apuesta, gana y disfruta. ¡La suerte está de tu lado!`,
-        mainMenuKbd()
+        getMainKeyboard(ctx)
     );
 });
 
@@ -334,52 +354,65 @@ bot.action('play', async (ctx) => {
 });
 
 bot.action(/lot_(.+)/, async (ctx) => {
-    const lotteryKey = ctx.match[1];
-    const lotteryName = {
-        florida: 'Florida',
-        georgia: 'Georgia',
-        newyork: 'Nueva York'
-    }[lotteryKey];
+    try {
+        const lotteryKey = ctx.match[1];
+        const lotteryName = {
+            florida: 'Florida',
+            georgia: 'Georgia',
+            newyork: 'Nueva York'
+        }[lotteryKey];
 
-    // Horario para Georgia
-    if (lotteryKey === 'georgia') {
-        const now = moment.tz(TIMEZONE);
-        const hour = now.hour();
-        const minute = now.minute();
-        const current = hour * 60 + minute;
-        const allowed = [
-            [9 * 60, 12 * 60],
-            [14 * 60, 18 * 60 + 30],
-            [20 * 60, 23 * 60]
-        ];
-        const isAllowed = allowed.some(([start, end]) => current >= start && current <= end);
-        if (!isAllowed) {
-            await ctx.answerCbQuery('⏰ Fuera de horario para Georgia', { show_alert: true });
+        console.log(`Jugador ${ctx.from.id} seleccionó lotería ${lotteryName}`);
+
+        // Horario para Georgia
+        if (lotteryKey === 'georgia') {
+            const now = moment.tz(TIMEZONE);
+            const hour = now.hour();
+            const minute = now.minute();
+            const current = hour * 60 + minute;
+            const allowed = [
+                [9 * 60, 12 * 60],
+                [14 * 60, 18 * 60 + 30],
+                [20 * 60, 23 * 60]
+            ];
+            const isAllowed = allowed.some(([start, end]) => current >= start && current <= end);
+            if (!isAllowed) {
+                await ctx.answerCbQuery('⏰ Fuera de horario para Georgia', { show_alert: true });
+                return;
+            }
+        }
+
+        const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
+        const { data: activeSession, error } = await supabase
+            .from('lottery_sessions')
+            .select('*')
+            .eq('lottery', lotteryName)
+            .eq('date', today)
+            .eq('status', 'open')
+            .maybeSingle();
+
+        if (error) {
+            console.error('Error al consultar sesión:', error);
+            await ctx.reply('❌ Error al verificar sesión. Intenta más tarde.');
             return;
         }
+
+        if (!activeSession) {
+            await ctx.answerCbQuery('❌ No hay una sesión abierta para esta lotería en el día de hoy.', { show_alert: true });
+            return;
+        }
+
+        ctx.session.lottery = lotteryName;
+        ctx.session.sessionId = activeSession.id;
+        await safeEdit(ctx,
+            `Has seleccionado <b>${escapeHTML(lotteryName)}</b> - Turno <b>${escapeHTML(activeSession.time_slot)}</b>.\n` +
+            `Ahora elige el tipo de jugada:`,
+            playTypeKbd()
+        );
+    } catch (e) {
+        console.error('Error en lot_ handler:', e);
+        await ctx.reply('❌ Ocurrió un error inesperado.');
     }
-
-    const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-    const { data: activeSession } = await supabase
-        .from('lottery_sessions')
-        .select('*')
-        .eq('lottery', lotteryName)
-        .eq('date', today)
-        .eq('status', 'open')
-        .maybeSingle();
-
-    if (!activeSession) {
-        await ctx.answerCbQuery('❌ No hay una sesión abierta para esta lotería en el día de hoy.', { show_alert: true });
-        return;
-    }
-
-    ctx.session.lottery = lotteryName;
-    ctx.session.sessionId = activeSession.id;
-    await safeEdit(ctx,
-        `Has seleccionado <b>${escapeHTML(lotteryName)}</b> - Turno <b>${escapeHTML(activeSession.time_slot)}</b>.\n` +
-        `Ahora elige el tipo de jugada:`,
-        playTypeKbd()
-    );
 });
 
 bot.action(/type_(.+)/, async (ctx) => {
@@ -397,7 +430,7 @@ bot.action(/type_(.+)/, async (ctx) => {
                 `También puedes usar <b>D</b> (decena) o <b>T</b> (terminal):\n` +
                 `- <code>D2 con 5 usd</code> significa TODOS los números que empiezan con 2 (20-29). El costo se multiplica por 10.\n` +
                 `- <code>T5 con 1 cup</code> significa TODOS los números que terminan con 5 (05,15,...,95). El costo se multiplica por 10.\n\n` +
-                `Ejemplos:\n12 con 1 usd\nD2 con 5 usd\nT5*1cup\n\n` +
+                `Ejemplos:\n12 con 1 usd\nD2 con 5 usd\nT5*1cup\n34*2 usd\n\n` +
                 `💭 <b>Escribe tus jugadas (una por línea):</b>`;
             break;
         case 'corridos':
@@ -435,7 +468,7 @@ bot.action('my_money', async (ctx) => {
     await safeEdit(ctx, text, myMoneyKbd());
 });
 
-// ---------- RECARGAR ----------
+// ---------- RECARGAR (nuevo flujo con captura) ----------
 bot.action('recharge', async (ctx) => {
     const { data: methods } = await supabase
         .from('deposit_methods')
@@ -447,17 +480,15 @@ bot.action('recharge', async (ctx) => {
         return;
     }
 
-    const buttons = methods.map(m => Markup.button.callback(m.name, `dep_${m.id}`));
-    const rows = [];
-    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
-    rows.push([Markup.button.callback('◀ Volver', 'my_money')]);
+    const buttons = methods.map(m => [Markup.button.callback(m.name, `dep_${m.id}`)]);
+    buttons.push([Markup.button.callback('◀ Volver', 'my_money')]);
 
     const rate = await getExchangeRate();
     await safeEdit(ctx,
         `💵 <b>¿Cómo deseas recargar?</b>\n\n` +
-        `Elige una opción para ver los datos de pago y luego <b>envía el monto</b> que transferiste (ej: <code>10 usd</code> o <code>500 cup</code>).\n\n` +
+        `Elige una opción para ver los datos de pago. Luego deberás enviar una <b>captura de pantalla</b> de la transferencia y el monto.\n\n` +
         `<b>Tasa de cambio:</b> 1 USD = ${rate} CUP`,
-        Markup.inlineKeyboard(rows)
+        Markup.inlineKeyboard(buttons)
     );
 });
 
@@ -475,13 +506,13 @@ bot.action(/dep_(\d+)/, async (ctx) => {
     }
 
     ctx.session.depositMethod = method;
-    ctx.session.awaitingDepositAmount = true;
+    ctx.session.awaitingDepositPhoto = true;
 
     await safeEdit(ctx,
         `🧾 <b>${escapeHTML(method.name)}</b>\n` +
         `Número: <code>${escapeHTML(method.card)}</code>\n` +
         `Confirmar: <code>${escapeHTML(method.confirm)}</code>\n\n` +
-        `✅ <b>Después de transferir, envía el MONTO que transferiste</b> (ej: <code>10 usd</code> o <code>500 cup</code>).`,
+        `📸 <b>Envía una captura de pantalla de la transferencia realizada.</b>`,
         null
     );
 });
@@ -504,12 +535,10 @@ bot.action('withdraw', async (ctx) => {
         return;
     }
 
-    const buttons = methods.map(m => Markup.button.callback(m.name, `wit_${m.id}`));
-    const rows = [];
-    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
-    rows.push([Markup.button.callback('◀ Volver', 'my_money')]);
+    const buttons = methods.map(m => [Markup.button.callback(m.name, `wit_${m.id}`)]);
+    buttons.push([Markup.button.callback('◀ Volver', 'my_money')]);
 
-    await safeEdit(ctx, '📤 <b>Elige un método de retiro:</b>', Markup.inlineKeyboard(rows));
+    await safeEdit(ctx, '📤 <b>Elige un método de retiro:</b>', Markup.inlineKeyboard(buttons));
 });
 
 bot.action(/wit_(\d+)/, async (ctx) => {
@@ -559,7 +588,7 @@ bot.action('my_bets', async (ctx) => {
     if (!bets || bets.length === 0) {
         await safeEdit(ctx,
             '📭 No tienes jugadas activas en este momento.\n\n⚠️ Envía tus jugadas con el formato correcto.',
-            null
+            getMainKeyboard(ctx)
         );
     } else {
         let text = '📋 <b>Tus últimas 5 jugadas:</b>\n\n';
@@ -570,7 +599,7 @@ bot.action('my_bets', async (ctx) => {
                 `   💰 ${b.cost_usd} USD / ${b.cost_cup} CUP\n` +
                 `   🕒 ${date}\n\n`;
         });
-        await safeEdit(ctx, text, null);
+        await safeEdit(ctx, text, getMainKeyboard(ctx));
     }
 });
 
@@ -597,7 +626,7 @@ bot.action('referrals', async (ctx) => {
         `<code>${escapeHTML(link)}</code>\n\n` +
         `📊 <b>Tus estadísticas:</b>\n` +
         `👥 Total de referidos: ${count || 0}`,
-        null
+        getMainKeyboard(ctx)
     );
 });
 
@@ -800,11 +829,9 @@ bot.action('adm_set_rate', async (ctx) => {
 bot.action('adm_set_prices', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const { data: prices } = await supabase.from('play_prices').select('*');
-    const buttons = prices.map(p => Markup.button.callback(p.bet_type, `set_price_${p.bet_type}`));
-    const rows = [];
-    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
-    rows.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('🎲 <b>Configurar precios y multiplicadores</b>\nElige el tipo:', Markup.inlineKeyboard(rows));
+    const buttons = prices.map(p => [Markup.button.callback(p.bet_type, `set_price_${p.bet_type}`)]);
+    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
+    await ctx.reply('🎲 <b>Configurar precios y multiplicadores</b>\nElige el tipo:', Markup.inlineKeyboard(buttons));
     await ctx.answerCbQuery();
 });
 
@@ -865,16 +892,14 @@ bot.action('admin_winning', async (ctx) => {
     }
 
     const buttons = availableSessions.map(s =>
-        Markup.button.callback(
+        [Markup.button.callback(
             `${s.lottery} - ${s.date} (${s.time_slot})`,
             `publish_win_${s.id}`
-        )
+        )]
     );
-    const rows = [];
-    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
-    rows.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
+    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
 
-    await ctx.reply('🔢 <b>Publicar números ganadores</b>\nSelecciona la sesión:', Markup.inlineKeyboard(rows));
+    await ctx.reply('🔢 <b>Publicar números ganadores</b>\nSelecciona la sesión:', Markup.inlineKeyboard(buttons));
     await ctx.answerCbQuery();
 });
 
@@ -896,7 +921,7 @@ bot.action(/publish_win_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== PROCESAR NÚMERO GANADOR (con soporte para D y T) ==========
+// ========== PROCESAR NÚMERO GANADOR (con soporte D/T) ==========
 async function processWinningNumber(sessionId, winningStr, ctx) {
     winningStr = winningStr.replace(/\s+/g, '');
     if (!/^\d{7}$/.test(winningStr)) {
@@ -915,7 +940,6 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         return false;
     }
 
-    // Verificar que no se haya publicado ya
     const { data: existingWin } = await supabase
         .from('winning_numbers')
         .select('id')
@@ -1051,7 +1075,7 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         }
     }
 
-    // Broadcast global del número ganador
+    // Broadcast global
     await broadcastToAllUsers(
         `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
         `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
@@ -1173,49 +1197,50 @@ bot.on(message('text'), async (ctx) => {
     }
 
     // ---------- FLUJOS DE USUARIO ----------
+    // Depósito: después de la foto, esperamos el monto
     if (session.awaitingDepositAmount) {
-        const { usd, cup } = parseAmount(text);
-        if (usd === 0 && cup === 0) {
-            await ctx.reply('❌ Formato inválido. Envía algo como <code>10 usd</code> o <code>500 cup</code>.', { parse_mode: 'HTML' });
+        const amountText = text;
+        const method = session.depositMethod;
+        const buffer = session.depositPhotoBuffer;
+        if (!buffer) {
+            await ctx.reply('❌ Error: no se encontró la captura. Comienza de nuevo.');
+            delete session.awaitingDepositAmount;
             return;
         }
 
-        const method = session.depositMethod;
-        let amountUSD = 0, amountCUP = 0;
-
-        if (usd > 0) {
-            amountUSD = usd;
-            const rate = await getExchangeRate();
-            const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
-            await supabase
-                .from('users')
-                .update({
-                    usd: parseFloat(user.usd) + amountUSD,
-                    bonus_usd: parseFloat(user.bonus_usd) + bonusUSD,
-                    updated_at: new Date()
-                })
-                .eq('telegram_id', uid);
-            await ctx.reply(`✅ Depósito de <b>${amountUSD} USD</b> confirmado.\n🎁 Bonus añadido: +${bonusUSD} USD (no retirable).`, { parse_mode: 'HTML' });
-        } else {
-            amountCUP = cup;
-            const rate = await getExchangeRate();
-            const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
-            await supabase
-                .from('users')
-                .update({
-                    cup: parseFloat(user.cup) + amountCUP,
-                    bonus_usd: parseFloat(user.bonus_usd) + bonusUSD,
-                    updated_at: new Date()
-                })
-                .eq('telegram_id', uid);
-            await ctx.reply(`✅ Depósito de <b>${amountCUP} CUP</b> confirmado.\n🎁 Bonus añadido: +${bonusUSD} USD (no retirable).`, { parse_mode: 'HTML' });
+        try {
+            const request = await createDepositRequest(uid, method.id, buffer, amountText);
+            // Notificar al admin
+            await ctx.telegram.sendMessage(ADMIN_CHANNEL,
+                `📥 <b>Nueva solicitud de DEPÓSITO</b>\n` +
+                `👤 Usuario: ${ctx.from.first_name} (${uid})\n` +
+                `🏦 Método: ${escapeHTML(method.name)}\n` +
+                `💰 Monto: ${amountText}\n` +
+                `📎 <a href="${request.screenshot_url}">Ver captura</a>\n` +
+                `🆔 Solicitud: ${request.id}`,
+                {
+                    parse_mode: 'HTML',
+                    reply_markup: Markup.inlineKeyboard([
+                        [Markup.button.callback('✅ Aprobar', `approve_deposit_${request.id}`),
+                         Markup.button.callback('❌ Rechazar', `reject_deposit_${request.id}`)]
+                    ]).reply_markup
+                }
+            );
+            await ctx.reply(`✅ <b>Solicitud de depósito enviada</b>\nMonto: ${amountText}\n⏳ En espera de aprobación. Te notificaremos cuando se acredite.`, { parse_mode: 'HTML' });
+        } catch (e) {
+            console.error(e);
+            await ctx.reply('❌ Error al procesar la solicitud. Intenta más tarde.');
         }
 
         delete session.awaitingDepositAmount;
         delete session.depositMethod;
+        delete session.depositPhotoBuffer;
+        // Mostrar menú principal
+        await ctx.reply('¿Qué deseas hacer ahora?', getMainKeyboard(ctx));
         return;
     }
 
+    // Retiro: esperando cuenta
     if (session.awaitingWithdrawAccount) {
         const account = text;
         const amount = parseFloat(user.usd);
@@ -1265,6 +1290,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // Transferencia: esperando ID destino
     if (session.awaitingTransferTarget) {
         const targetId = parseInt(text);
         if (isNaN(targetId)) {
@@ -1294,6 +1320,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // Transferencia: esperando monto
     if (session.awaitingTransferAmount) {
         const amount = parseFloat(text.replace(',', '.'));
         if (isNaN(amount) || amount <= 0) {
@@ -1433,12 +1460,132 @@ bot.on(message('text'), async (ctx) => {
         delete session.betType;
         delete session.lottery;
         delete session.sessionId;
+        // Mostrar menú principal
+        await ctx.reply('¿Qué deseas hacer ahora?', getMainKeyboard(ctx));
         return;
     }
 
-    await ctx.reply('No entendí ese mensaje. Por favor usa los botones del menú.',
-        Markup.inlineKeyboard([[Markup.button.callback('📋 Menú principal', 'main')]])
-    );
+    // Si no es ningún flujo, mostrar menú principal
+    await ctx.reply('No entendí ese mensaje. Por favor usa los botones del menú.', getMainKeyboard(ctx));
+});
+
+// ========== MANEJADOR DE FOTOS (para depósitos) ==========
+bot.on(message('photo'), async (ctx) => {
+    const uid = ctx.from.id;
+    const session = ctx.session;
+
+    if (session.awaitingDepositPhoto) {
+        // Obtener la foto de mayor resolución
+        const photo = ctx.message.photo.pop();
+        const fileId = photo.file_id;
+        const fileLink = await ctx.telegram.getFileLink(fileId);
+        // Descargar el archivo
+        const response = await axios({ url: fileLink.href, responseType: 'arraybuffer' });
+        const buffer = Buffer.from(response.data, 'binary');
+
+        // Guardar en sesión
+        session.depositPhotoBuffer = buffer;
+        delete session.awaitingDepositPhoto;
+        session.awaitingDepositAmount = true;
+
+        await ctx.reply('✅ Captura recibida. Ahora envía el <b>monto transferido</b> (ej: <code>10 usd</code> o <code>500 cup</code>).', { parse_mode: 'HTML' });
+        return;
+    }
+
+    // Si no se esperaba foto, responder con menú
+    await ctx.reply('No se esperaba una foto. Usa los botones del menú.', getMainKeyboard(ctx));
+});
+
+// ========== APROBACIÓN/RECHAZO DE DEPÓSITOS ==========
+bot.action(/approve_deposit_(\d+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) {
+        await ctx.answerCbQuery('No autorizado', { show_alert: true });
+        return;
+    }
+    try {
+        const requestId = parseInt(ctx.match[1]);
+        const { data: request } = await supabase
+            .from('deposit_requests')
+            .select('*')
+            .eq('id', requestId)
+            .single();
+
+        if (!request) {
+            await ctx.answerCbQuery('Solicitud no encontrada', { show_alert: true });
+            return;
+        }
+
+        // Parsear el monto
+        const { usd, cup } = parseAmount(request.amount);
+        const user = await getUser(request.user_id);
+        let updateData = { updated_at: new Date() };
+        if (usd > 0) {
+            const rate = await getExchangeRate();
+            const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
+            updateData.usd = parseFloat(user.usd) + usd;
+            updateData.bonus_usd = parseFloat(user.bonus_usd) + bonusUSD;
+        } else if (cup > 0) {
+            const rate = await getExchangeRate();
+            const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
+            updateData.cup = parseFloat(user.cup) + cup;
+            updateData.bonus_usd = parseFloat(user.bonus_usd) + bonusUSD;
+        } else {
+            await ctx.answerCbQuery('Monto no válido', { show_alert: true });
+            return;
+        }
+
+        await supabase
+            .from('users')
+            .update(updateData)
+            .eq('telegram_id', request.user_id);
+
+        await supabase
+            .from('deposit_requests')
+            .update({ status: 'approved', updated_at: new Date() })
+            .eq('id', requestId);
+
+        await ctx.telegram.sendMessage(request.user_id,
+            `✅ <b>Depósito aprobado</b>\nSe ha acreditado <b>${request.amount}</b> a tu saldo.\n🎁 Bonus añadido.`,
+            { parse_mode: 'HTML' }
+        );
+
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        await ctx.reply('✅ Depósito aprobado y saldo actualizado.');
+        await ctx.answerCbQuery();
+    } catch (e) {
+        console.error(e);
+        await ctx.answerCbQuery('❌ Error al aprobar', { show_alert: true });
+    }
+});
+
+bot.action(/reject_deposit_(\d+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    try {
+        const requestId = parseInt(ctx.match[1]);
+        await supabase
+            .from('deposit_requests')
+            .update({ status: 'rejected', updated_at: new Date() })
+            .eq('id', requestId);
+
+        const { data: request } = await supabase
+            .from('deposit_requests')
+            .select('user_id')
+            .eq('id', requestId)
+            .single();
+
+        if (request) {
+            await ctx.telegram.sendMessage(request.user_id,
+                '❌ <b>Depósito rechazado</b>\nLa solicitud no pudo ser procesada. Contacta al administrador.',
+                { parse_mode: 'HTML' }
+            );
+        }
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        await ctx.reply('❌ Depósito rechazado.');
+        await ctx.answerCbQuery();
+    } catch (e) {
+        console.error(e);
+        await ctx.answerCbQuery('❌ Error al rechazar', { show_alert: true });
+    }
 });
 
 // ========== APROBACIÓN/RECHAZO DE RETIROS ==========
