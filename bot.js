@@ -1,8 +1,6 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión final con notificaciones globales (broadcast) al abrir/cerrar sesiones
-// y al publicar números ganadores. Mensajes más inspiradores.
-// Incluye toda la funcionalidad: apuestas, recargas, retiros, transferencias, admin, etc.
+// Versión final con soporte para jugadas D (decenas) y T (terminales)
 // ==============================
 
 require('dotenv').config();
@@ -106,6 +104,7 @@ function parseAmount(text) {
     return { usd, cup };
 }
 
+// ========== PARSEO DE APUESTAS CON SOPORTE PARA D Y T ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return null;
@@ -118,10 +117,33 @@ function parseBetLine(line, betType) {
     montoStr = match[2];
     if (match[3]) moneda = match[3];
 
-    if (betType === 'fijo' || betType === 'corridos') {
+    const montoBase = parseFloat(montoStr);
+    if (isNaN(montoBase) || montoBase <= 0) return null;
+
+    let montoReal = montoBase;
+    let numeroGuardado = numero;
+
+    // Validar según el tipo de jugada
+    if (betType === 'fijo') {
+        // Patrones normales de 2 dígitos
+        if (/^\d{2}$/.test(numero)) {
+            // válido
+        } else if (/^[Dd](\d)$/.test(numero)) {
+            // Decena: D2 significa todos los números que empiezan con 2 (20-29)
+            // Se multiplica el monto por 10 porque son 10 números
+            montoReal = montoBase * 10;
+            numeroGuardado = numero.toUpperCase(); // guardamos como D2
+        } else if (/^[Tt](\d)$/.test(numero)) {
+            // Terminal: T5 significa todos los números que terminan con 5 (05,15,...,95)
+            montoReal = montoBase * 10;
+            numeroGuardado = numero.toUpperCase(); // guardamos como T5
+        } else {
+            return null;
+        }
+    } else if (betType === 'corridos') {
         if (!/^\d{2}$/.test(numero) && !/^[DdTt]\d$/.test(numero)) return null;
-        if (/^[Dd](\d)$/.test(numero)) numero = '0' + numero.slice(1);
-        if (/^[Tt](\d)$/.test(numero)) numero = numero.slice(1) + '0';
+        // En corridos no aplica multiplicación especial, pero aceptamos D y T? Por ahora solo números normales
+        if (!/^\d{2}$/.test(numero)) return null; // solo números de 2 dígitos
     } else if (betType === 'centena') {
         if (!/^\d{3}$/.test(numero)) return null;
     } else if (betType === 'parle') {
@@ -130,13 +152,10 @@ function parseBetLine(line, betType) {
         return null;
     }
 
-    const monto = parseFloat(montoStr);
-    if (isNaN(monto) || monto <= 0) return null;
-
     return {
-        numero,
-        usd: moneda === 'usd' ? monto : 0,
-        cup: moneda === 'cup' ? monto : 0
+        numero: numeroGuardado,
+        usd: moneda === 'usd' ? montoReal : 0,
+        cup: moneda === 'cup' ? montoReal : 0
     };
 }
 
@@ -206,7 +225,7 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// ========== TECLADOS REORGANIZADOS (FILAS DE 2) ==========
+// ========== TECLADOS REORGANIZADOS ==========
 function buildKeyboard(buttons, cols = 2) {
     const rows = [];
     for (let i = 0; i < buttons.length; i += cols) {
@@ -340,7 +359,6 @@ bot.action(/lot_(.+)/, async (ctx) => {
         }
     }
 
-    // Verificar sesión abierta hoy
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     const { data: activeSession } = await supabase
         .from('lottery_sessions')
@@ -376,8 +394,10 @@ bot.action(/type_(.+)/, async (ctx) => {
             instructions = `🎯 <b>FIJO</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
                 `Escribe UNA LÍNEA por cada número de 2 DÍGITOS.\n` +
                 `<b>Formato:</b> <code>12 con 5 usd</code>  o  <code>34*2cup</code>\n` +
-                `También D2 (decena) o T5 (terminal).\n\n` +
-                `Ejemplo:\n12 con 1 usd\n34*2 usd\n89 con 5 cup\n\n` +
+                `También puedes usar <b>D</b> (decena) o <b>T</b> (terminal):\n` +
+                `- <code>D2 con 5 usd</code> significa TODOS los números que empiezan con 2 (20-29). El costo se multiplica por 10.\n` +
+                `- <code>T5 con 1 cup</code> significa TODOS los números que terminan con 5 (05,15,...,95). El costo se multiplica por 10.\n\n` +
+                `Ejemplos:\n12 con 1 usd\nD2 con 5 usd\nT5*1cup\n\n` +
                 `💭 <b>Escribe tus jugadas (una por línea):</b>`;
             break;
         case 'corridos':
@@ -600,7 +620,7 @@ bot.action('admin_panel', async (ctx) => {
     await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
 });
 
-// ========== GESTIÓN DE SESIONES (NUEVO FLUJO) ==========
+// ========== GESTIÓN DE SESIONES ==========
 bot.action('admin_sessions', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     await showRegionsMenu(ctx);
@@ -668,7 +688,6 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
         const lottery = ctx.match[1];
         const timeSlot = ctx.match[2];
         const endTime = getEndTimeFromSlot(timeSlot);
-
         const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
 
         const { data: existing } = await supabase
@@ -698,7 +717,7 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
 
         await ctx.answerCbQuery('✅ Sesión abierta');
 
-        // --- BROADCAST INSPIRADOR A TODOS LOS USUARIOS ---
+        // Broadcast inspirador
         await broadcastToAllUsers(
             `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
             `✨ La región <b>${escapeHTML(lottery)}</b> acaba de abrir su turno de <b>${escapeHTML(timeSlot)}</b>.\n` +
@@ -736,7 +755,6 @@ bot.action(/toggle_session_(\d+)_(.+)/, async (ctx) => {
             .single();
 
         if (newStatus === 'closed') {
-            // --- BROADCAST DE CIERRE A TODOS LOS USUARIOS ---
             await broadcastToAllUsers(
                 `🔴 <b>SESIÓN CERRADA</b>\n\n` +
                 `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
@@ -878,7 +896,7 @@ bot.action(/publish_win_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== PROCESAR NÚMERO GANADOR ==========
+// ========== PROCESAR NÚMERO GANADOR (con soporte para D y T) ==========
 async function processWinningNumber(sessionId, winningStr, ctx) {
     winningStr = winningStr.replace(/\s+/g, '');
     if (!/^\d{7}$/.test(winningStr)) {
@@ -964,7 +982,15 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
 
             switch (bet.bet_type) {
                 case 'fijo':
-                    if (numero === fijo) ganado = true;
+                    if (numero.startsWith('D')) {
+                        const digito = numero[1];
+                        if (fijo.startsWith(digito)) ganado = true;
+                    } else if (numero.startsWith('T')) {
+                        const digito = numero[1];
+                        if (fijo.endsWith(digito)) ganado = true;
+                    } else {
+                        if (numero === fijo) ganado = true;
+                    }
                     break;
                 case 'corridos':
                     if (corridos.includes(numero)) ganado = true;
@@ -1025,7 +1051,7 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         }
     }
 
-    // --- BROADCAST GLOBAL DEL NÚMERO GANADOR ---
+    // Broadcast global del número ganador
     await broadcastToAllUsers(
         `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
         `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
@@ -1506,7 +1532,7 @@ async function closeExpiredSessions() {
                 .update({ status: 'closed', updated_at: new Date() })
                 .eq('id', session.id);
 
-            // --- BROADCAST DE CIERRE AUTOMÁTICO ---
+            // Broadcast de cierre automático
             await broadcastToAllUsers(
                 `⏰ <b>SESIÓN CERRADA AUTOMÁTICAMENTE</b>\n\n` +
                 `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
