@@ -164,9 +164,9 @@ function parseBetMessage(text, betType) {
     };
 }
 
-// ========== FUNCIÓN PARA HORA DE CIERRE ==========
+// ========== FUNCIÓN PARA HORA DE CIERRE (CORREGIDA) ==========
 function getEndTimeFromSlot(timeSlot) {
-    const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
+    const now = moment.tz(TIMEZONE);
     let hour, minute;
     if (timeSlot === 'Día') {
         hour = 12;
@@ -175,7 +175,9 @@ function getEndTimeFromSlot(timeSlot) {
         hour = 23;
         minute = 0;
     }
-    return moment.tz(`${today} ${hour}:${minute}:00`, TIMEZONE).toDate();
+    // Crear fecha directamente con set, sin concatenar strings
+    const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
+    return endTime.toDate();
 }
 
 // ========== MIDDLEWARE: USUARIO ==========
