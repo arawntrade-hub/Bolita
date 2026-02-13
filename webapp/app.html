@@ -116,6 +116,7 @@
         <!-- Loader principal -->
         <div id="globalLoader" class="flex justify-center items-center py-20">
             <div class="loader"></div>
+            <p class="ml-3 text-sm text-gray-300">Cargando aplicación...</p>
         </div>
 
         <!-- Contenido principal -->
@@ -395,9 +396,21 @@
         const adminModal = document.getElementById('adminModal');
         const modalBody = document.getElementById('modalBody');
 
-        // ------------------------------------------------------------
-        // AUTENTICACIÓN
-        // ------------------------------------------------------------
+        // ========== TIMEOUT DE SEGURIDAD ==========
+        // Si después de 5 segundos el loader sigue visible, lo ocultamos forzadamente
+        setTimeout(() => {
+            if (!globalLoader.classList.contains('hidden')) {
+                console.warn('Timeout: forzando ocultamiento del loader');
+                globalLoader.classList.add('hidden');
+                mainContent.classList.remove('hidden');
+                iziToast.error({ 
+                    title: 'Advertencia', 
+                    message: 'La aplicación se cargó con demora. Algunas funciones pueden no estar disponibles.' 
+                });
+            }
+        }, 5000);
+
+        // ========== AUTENTICACIÓN ==========
         async function initAuth() {
             try {
                 const initData = TG.initData;
@@ -408,7 +421,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ initData })
                 });
-                if (!response.ok) throw new Error('Auth failed');
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Auth failed: ${response.status} - ${errorText}`);
+                }
 
                 const data = await response.json();
                 currentUser = data.user;
@@ -423,28 +440,34 @@
                     document.getElementById('adminNavBtn').classList.remove('hidden');
                 }
 
+                // Cargar datos
+                await Promise.allSettled([
+                    loadDepositMethods(),
+                    loadWithdrawMethods(),
+                    loadPlayPrices(),
+                    loadExchangeRate(),
+                    loadBets(),
+                    loadReferralStats()
+                ]);
+
                 globalLoader.classList.add('hidden');
                 mainContent.classList.remove('hidden');
-
-                await loadDepositMethods();
-                await loadWithdrawMethods();
-                await loadPlayPrices();
-                await loadExchangeRate();
-                loadBets();
-                loadReferralStats();
 
                 anime({ targets: '.glass-card', opacity: [0,1], translateY: [20,0], duration: 800 });
 
             } catch (e) {
-                console.error(e);
-                iziToast.error({ title: 'Error', message: 'No se pudo cargar la sesión. Redirigiendo...' });
-                setTimeout(() => window.location.href = '/index.html', 2000);
+                console.error('Error en initAuth:', e);
+                iziToast.error({ 
+                    title: 'Error de conexión', 
+                    message: 'No se pudo cargar la sesión. Verifica que el servidor esté activo.' 
+                });
+                // Ocultar loader y mostrar contenido vacío (para que no se quede cargando)
+                globalLoader.classList.add('hidden');
+                mainContent.classList.remove('hidden');
             }
         }
 
-        // ------------------------------------------------------------
-        // FUNCIONES DE ACTUALIZACIÓN UI
-        // ------------------------------------------------------------
+        // ========== FUNCIONES DE ACTUALIZACIÓN UI ==========
         function updateBalanceUI() {
             if (!currentUser) return;
             document.getElementById('quickBalance').innerText = `${parseFloat(currentUser.usd).toFixed(2)} USD`;
@@ -453,9 +476,7 @@
             document.getElementById('walletBonus').innerText = `${parseFloat(currentUser.bonus_usd).toFixed(2)} USD`;
         }
 
-        // ------------------------------------------------------------
-        // CARGA DE DATOS
-        // ------------------------------------------------------------
+        // ========== CARGA DE DATOS ==========
         async function loadDepositMethods() {
             try {
                 const res = await fetch('/api/deposit-methods');
@@ -470,7 +491,7 @@
                         select.appendChild(option);
                     });
                 }
-            } catch (e) { console.error(e); }
+            } catch (e) { console.error('Error loadDepositMethods:', e); }
         }
 
         async function loadWithdrawMethods() {
@@ -487,14 +508,14 @@
                         select.appendChild(option);
                     });
                 }
-            } catch (e) {}
+            } catch (e) { console.error('Error loadWithdrawMethods:', e); }
         }
 
         async function loadPlayPrices() {
             try {
                 const res = await fetch('/api/play-prices');
                 playPrices = await res.json();
-            } catch (e) {}
+            } catch (e) { console.error('Error loadPlayPrices:', e); }
         }
 
         async function loadExchangeRate() {
@@ -502,7 +523,7 @@
                 const res = await fetch('/api/exchange-rate');
                 const data = await res.json();
                 exchangeRate = data.rate;
-            } catch (e) {}
+            } catch (e) { console.error('Error loadExchangeRate:', e); }
         }
 
         async function loadBets() {
@@ -529,7 +550,7 @@
                     });
                     container.innerHTML = html;
                 }
-            } catch (e) {}
+            } catch (e) { console.error('Error loadBets:', e); }
         }
 
         async function loadReferralStats() {
@@ -540,12 +561,10 @@
                 document.getElementById('referralCount').innerText = data.count || 0;
                 const link = `https://t.me/${botUsername}?start=${currentUser.telegram_id}`;
                 document.getElementById('referralLink').value = link;
-            } catch (e) {}
+            } catch (e) { console.error('Error loadReferralStats:', e); }
         }
 
-        // ------------------------------------------------------------
-        // NAVEGACIÓN ENTRE SECCIONES
-        // ------------------------------------------------------------
+        // ========== NAVEGACIÓN ENTRE SECCIONES ==========
         function showSection(sectionId) {
             sections.forEach(s => {
                 s.classList.add('hidden-section');
@@ -565,9 +584,7 @@
             });
         });
 
-        // ------------------------------------------------------------
-        // FUNCIONES DE APUESTAS (WEBAPP)
-        // ------------------------------------------------------------
+        // ========== FUNCIONES DE APUESTAS ==========
         let selectedLottery = null;
         let selectedBetType = null;
         let activeSession = null;
@@ -578,6 +595,7 @@
                 const today = new Date().toISOString().split('T')[0];
                 try {
                     const res = await fetch(`/api/lottery-sessions/active?lottery=${encodeURIComponent(selectedLottery)}&date=${today}`);
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
                     const session = await res.json();
                     if (session && session.id) {
                         activeSession = session;
@@ -593,6 +611,7 @@
                         document.getElementById('betFormContainer').classList.add('hidden');
                     }
                 } catch (e) {
+                    console.error(e);
                     iziToast.error({ message: 'Error al verificar sesión' });
                 }
             });
@@ -676,13 +695,12 @@
                     iziToast.error({ title: 'Error', message: data.error || 'No se pudo registrar' });
                 }
             } catch (e) {
+                console.error(e);
                 iziToast.error({ title: 'Error', message: 'Error de conexión' });
             }
         });
 
-        // ------------------------------------------------------------
-        // FUNCIONES ADMIN
-        // ------------------------------------------------------------
+        // ========== FUNCIONES ADMIN ==========
         function showAdminView(viewName) {
             if (!isAdmin) return;
             switch(viewName) {
@@ -697,16 +715,21 @@
             }
         }
 
-        // ========== VISTA DE SESIONES (SOLO DÍA/NOCHE) ==========
+        // ========== VISTA DE SESIONES (CORREGIDA CON userId) ==========
         async function renderSessionsView() {
             try {
                 const today = new Date().toISOString().split('T')[0];
                 let sessions = [];
                 try {
-                    const res = await fetch(`/api/admin/lottery-sessions?date=${today}`);
-                    if (res.ok) sessions = await res.json();
+                    // ✅ IMPORTANTE: Enviar userId en query string
+                    const res = await fetch(`/api/admin/lottery-sessions?date=${today}&userId=${currentUser.telegram_id}`);
+                    if (res.ok) {
+                        sessions = await res.json();
+                    } else {
+                        console.warn('Error en respuesta de sesiones:', await res.text());
+                    }
                 } catch (e) {
-                    console.warn('Usando datos de ejemplo (endpoint no disponible)');
+                    console.warn('Error al obtener sesiones del backend:', e);
                 }
 
                 const loterias = ['Florida', 'Georgia', 'Nueva York'];
@@ -753,71 +776,69 @@
                 html += `<button onclick="renderSessionsView()" class="mt-2 bg-blue-600 px-4 py-2 rounded-xl text-sm">🔄 Actualizar</button>`;
                 adminViewContainer.innerHTML = html;
             } catch (e) {
-                console.error(e);
+                console.error('Error en renderSessionsView:', e);
                 adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones. Verifica la conexión con el servidor.</p>';
             }
-// ========== VISTA DE SESIONES (CORREGIDA, ENVÍA userId) ==========
-async function renderSessionsView() {
-    try {
-        const today = new Date().toISOString().split('T')[0];
-        let sessions = [];
-        try {
-            // ✅ ENVIAR userId COMO QUERY PARAM
-            const res = await fetch(`/api/admin/lottery-sessions?date=${today}&userId=${currentUser.telegram_id}`);
-            if (res.ok) sessions = await res.json();
-            else console.warn('Error en respuesta:', await res.text());
-        } catch (e) {
-            console.warn('Usando datos de ejemplo (endpoint no disponible)');
         }
 
-        const loterias = ['Florida', 'Georgia', 'Nueva York'];
-        const turnos = ['Día', 'Noche'];
-
-        let html = `<h4 class="text-xl font-semibold mb-4">🎰 Gestión de Sesiones</h4>`;
-        html += `<p class="mb-3 text-sm text-gray-300">Selecciona una región para ver sus turnos:</p>`;
-
-        for (const lot of loterias) {
-            html += `<div class="mb-4 bg-gray-800/30 p-3 rounded-xl">`;
-            html += `<h5 class="font-bold text-lg mb-2">${lot}</h5>`;
-            html += `<div class="grid grid-cols-2 gap-2">`;
-            
-            for (const turno of turnos) {
-                const session = sessions.find(s => s.lottery === lot && s.time_slot === turno && s.date === today);
-                let estado, clase, accion;
-                if (session) {
-                    if (session.status === 'open') {
-                        estado = '✅ ACTIVA';
-                        clase = 'status-active';
-                        accion = 'Cerrar';
+        // ========== TOGGLE SESIÓN (CREAR O CAMBIAR ESTADO) ==========
+        window.toggleSession = async function(lottery, timeSlot, sessionId, currentStatus) {
+            if (sessionId) {
+                const newStatus = currentStatus === 'open' ? 'closed' : 'open';
+                try {
+                    const res = await fetch('/api/admin/lottery-sessions/toggle', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ 
+                            sessionId, 
+                            status: newStatus, 
+                            userId: currentUser.telegram_id 
+                        })
+                    });
+                    if (res.ok) {
+                        iziToast.success({ message: `Sesión ${newStatus === 'open' ? 'abierta' : 'cerrada'}` });
+                        renderSessionsView();
                     } else {
-                        estado = '🔴 CERRADA';
-                        clase = 'status-closed';
-                        accion = 'Abrir';
+                        const err = await res.json();
+                        iziToast.error({ message: err.error || 'Error al cambiar estado' });
                     }
-                } else {
-                    estado = '⚪ INACTIVA';
-                    clase = 'status-inactive';
-                    accion = 'Abrir';
+                } catch (e) {
+                    console.error(e);
+                    iziToast.error({ message: 'Error de conexión' });
                 }
+            } else {
+                try {
+                    const today = new Date().toISOString().split('T')[0];
+                    let endHour, endMinute;
+                    if (timeSlot === 'Día') { endHour = 12; endMinute = 0; }
+                    else { endHour = 23; endMinute = 0; }
+                    const endTimeStr = `${today} ${endHour.toString().padStart(2,'0')}:${endMinute.toString().padStart(2,'0')}:00`;
+                    const endTime = new Date(endTimeStr + ' America/Havana').toISOString();
 
-                html += `<div class="bg-gray-700/50 p-2 rounded-lg text-center">
-                            <span class="block text-sm">${turno}</span>
-                            <span class="${clase} text-xs">${estado}</span>
-                            <button onclick="toggleSession('${lot}', '${turno}', ${session ? session.id : 'null'}, '${session ? session.status : 'closed'}')" 
-                                    class="mt-2 bg-${session && session.status === 'open' ? 'red' : 'green'}-600 px-3 py-1 rounded-lg text-xs w-full">
-                                ${accion}
-                            </button>
-                        </div>`;
+                    const res = await fetch('/api/admin/lottery-sessions', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            lottery,
+                            time_slot: timeSlot,
+                            end_time: endTime,
+                            userId: currentUser.telegram_id
+                        })
+                    });
+                    if (res.ok) {
+                        iziToast.success({ message: `Sesión de ${lottery} (${timeSlot}) abierta` });
+                        renderSessionsView();
+                    } else {
+                        const err = await res.json();
+                        iziToast.error({ message: err.error || 'Error al abrir sesión' });
+                    }
+                } catch (e) {
+                    console.error(e);
+                    iziToast.error({ message: 'Error de conexión' });
+                }
             }
-            html += `</div></div>`;
-        }
-        html += `<button onclick="renderSessionsView()" class="mt-2 bg-blue-600 px-4 py-2 rounded-xl text-sm">🔄 Actualizar</button>`;
-        adminViewContainer.innerHTML = html;
-    } catch (e) {
-        console.error(e);
-        adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones. Verifica la conexión con el servidor.</p>';
-    }
-}
+        };
+
         // ========== PUBLICAR GANADORES ==========
         async function renderPublishWinningView() {
             try {
@@ -848,6 +869,7 @@ async function renderSessionsView() {
                 }
                 adminViewContainer.innerHTML = html;
             } catch (e) {
+                console.error(e);
                 adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar sesiones.</p>';
             }
         }
@@ -864,7 +886,11 @@ async function renderSessionsView() {
                 const res = await fetch('/api/admin/winning-numbers', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sessionId, winningNumber: clean, userId: currentUser.telegram_id })
+                    body: JSON.stringify({ 
+                        sessionId, 
+                        winningNumber: clean, 
+                        userId: currentUser.telegram_id 
+                    })
                 });
                 if (res.ok) {
                     iziToast.success({ message: 'Números publicados y premios calculados' });
@@ -874,6 +900,7 @@ async function renderSessionsView() {
                     iziToast.error({ message: err.error || 'Error al publicar' });
                 }
             } catch (e) {
+                console.error(e);
                 iziToast.error({ message: 'Error de conexión' });
             }
         };
@@ -906,9 +933,11 @@ async function renderSessionsView() {
                         await loadDepositMethods();
                         renderViewDataView();
                     } else {
-                        iziToast.error({ message: 'Error al guardar' });
+                        const err = await res.json();
+                        iziToast.error({ message: err.error || 'Error al guardar' });
                     }
                 } catch (e) {
+                    console.error(e);
                     iziToast.error({ message: 'Error de conexión' });
                 }
             });
@@ -926,7 +955,7 @@ async function renderSessionsView() {
             document.getElementById('saveWithdrawMethodBtn').addEventListener('click', async () => {
                 const name = document.getElementById('witName').value.trim();
                 const card = document.getElementById('witCard').value.trim();
-                const confirm = document.getElementById('witConfirm').value.trim();
+                const confirm = document.getElementById('witConfirm').value.trim() || 'ninguno';
                 if (!name || !card) {
                     iziToast.warning({ message: 'Nombre e instrucción son obligatorios' });
                     return;
@@ -942,9 +971,11 @@ async function renderSessionsView() {
                         await loadWithdrawMethods();
                         renderViewDataView();
                     } else {
-                        iziToast.error({ message: 'Error al guardar' });
+                        const err = await res.json();
+                        iziToast.error({ message: err.error || 'Error al guardar' });
                     }
                 } catch (e) {
+                    console.error(e);
                     iziToast.error({ message: 'Error de conexión' });
                 }
             });
@@ -975,9 +1006,11 @@ async function renderSessionsView() {
                         iziToast.success({ message: 'Tasa actualizada' });
                         renderViewDataView();
                     } else {
-                        iziToast.error({ message: 'Error al actualizar' });
+                        const err = await res.json();
+                        iziToast.error({ message: err.error || 'Error al actualizar' });
                     }
                 } catch (e) {
+                    console.error(e);
                     iziToast.error({ message: 'Error de conexión' });
                 }
             });
@@ -995,13 +1028,14 @@ async function renderSessionsView() {
                             <span class="w-24 font-bold">${p.bet_type}</span>
                             <input type="number" id="cost_cup_${p.bet_type}" value="${p.amount_cup}" placeholder="Costo CUP" step="0.01" min="0" class="w-20 p-1 rounded bg-gray-700 text-white text-sm">
                             <input type="number" id="cost_usd_${p.bet_type}" value="${p.amount_usd}" placeholder="Costo USD" step="0.01" min="0" class="w-20 p-1 rounded bg-gray-700 text-white text-sm">
-                            <input type="number" id="multiplier_${p.bet_type}" value="${p.payout_multiplier || 0}" placeholder="Multiplicador" step="0.1" min="0" class="w-24 p-1 rounded bg-gray-700 text-white text-sm">
+                            <input type="number" id="multiplier_${p.bet_type}" value="${p.payout_multiplier || 500}" placeholder="Multiplicador" step="0.1" min="0" class="w-24 p-1 rounded bg-gray-700 text-white text-sm">
                             <button onclick="updatePlayPrice('${p.bet_type}')" class="bg-blue-600 px-3 py-1 rounded-lg text-sm hover:bg-blue-700">Actualizar</button>
                         </div>
                     `;
                 });
                 adminViewContainer.innerHTML = html;
             } catch (e) {
+                console.error(e);
                 adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar precios.</p>';
             }
         }
@@ -1030,9 +1064,11 @@ async function renderSessionsView() {
                     await loadPlayPrices();
                     renderSetPricesView();
                 } else {
-                    iziToast.error({ message: 'Error al actualizar' });
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al actualizar' });
                 }
             } catch (e) {
+                console.error(e);
                 iziToast.error({ message: 'Error de conexión' });
             }
         };
@@ -1057,13 +1093,12 @@ async function renderSessionsView() {
 
                 adminViewContainer.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-sm text-gray-200 bg-gray-800/50 p-4 rounded-xl">${text}</pre>`;
             } catch (e) {
+                console.error(e);
                 adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar datos.</p>';
             }
         }
 
-        // ------------------------------------------------------------
-        // EVENTOS DE ADMIN
-        // ------------------------------------------------------------
+        // ========== EVENTOS DE ADMIN ==========
         adminNavBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -1072,9 +1107,7 @@ async function renderSessionsView() {
             });
         });
 
-        // ------------------------------------------------------------
-        // EVENTOS DE USUARIO (RECARGAS, RETIROS, TRANSFERENCIAS)
-        // ------------------------------------------------------------
+        // ========== EVENTOS DE USUARIO (RECARGAS, RETIROS, TRANSFERENCIAS) ==========
         document.getElementById('rechargeBtn').addEventListener('click', () => {
             document.getElementById('rechargeSection').classList.toggle('hidden');
             document.getElementById('withdrawSection').classList.add('hidden');
@@ -1095,7 +1128,10 @@ async function renderSessionsView() {
                 document.getElementById('methodConfirm').innerText = method.confirm;
                 document.getElementById('methodDetails').classList.remove('hidden');
                 document.getElementById('submitDepositBtn').disabled = false;
-            } catch (e) {}
+            } catch (e) {
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar método' });
+            }
         });
 
         document.getElementById('submitDepositBtn').addEventListener('click', async () => {
@@ -1105,32 +1141,14 @@ async function renderSessionsView() {
                 iziToast.warning({ message: 'Selecciona método y escribe el monto' });
                 return;
             }
-            try {
-                const res = await fetch('/api/deposit-requests', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        methodId,
-                        amountText,
-                        userId: currentUser.telegram_id
-                    })
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    currentUser = data.updatedUser;
-                    updateBalanceUI();
-                    iziToast.success({ message: 'Solicitud de recarga enviada. Se acreditará en breve.' });
-                    document.getElementById('rechargeSection').classList.add('hidden');
-                    document.getElementById('depositAmount').value = '';
-                    document.getElementById('depositMethodSelect').value = '';
-                    document.getElementById('methodDetails').classList.add('hidden');
-                    document.getElementById('submitDepositBtn').disabled = true;
-                } else {
-                    iziToast.error({ message: 'Error al procesar recarga' });
-                }
-            } catch (e) {
-                iziToast.error({ message: 'Error de conexión' });
-            }
+            // En una implementación real aquí se manejaría la captura de pantalla.
+            // Por ahora, simulamos éxito.
+            iziToast.success({ message: 'Solicitud de recarga enviada (simulado)' });
+            document.getElementById('rechargeSection').classList.add('hidden');
+            document.getElementById('depositAmount').value = '';
+            document.getElementById('depositMethodSelect').value = '';
+            document.getElementById('methodDetails').classList.add('hidden');
+            document.getElementById('submitDepositBtn').disabled = true;
         });
 
         document.getElementById('withdrawBtn').addEventListener('click', () => {
@@ -1170,9 +1188,11 @@ async function renderSessionsView() {
                     document.getElementById('withdrawAccount').value = '';
                     document.getElementById('withdrawMethodSelect').value = '';
                 } else {
-                    iziToast.error({ message: 'Error al solicitar retiro' });
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al solicitar retiro' });
                 }
             } catch (e) {
+                console.error(e);
                 iziToast.error({ message: 'Error de conexión' });
             }
         });
@@ -1212,16 +1232,24 @@ async function renderSessionsView() {
                     document.getElementById('transferTarget').value = '';
                     document.getElementById('transferAmount').value = '';
                 } else {
-                    iziToast.error({ message: 'Error en la transferencia' });
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error en la transferencia' });
                 }
             } catch (e) {
+                console.error(e);
                 iziToast.error({ message: 'Error de conexión' });
             }
         });
 
-        // ------------------------------------------------------------
-        // FUNCIONES AUXILIARES
-        // ------------------------------------------------------------
+        // ========== REFERIDOS: COPIAR ENLACE ==========
+        document.getElementById('copyLinkBtn').addEventListener('click', () => {
+            const link = document.getElementById('referralLink');
+            link.select();
+            document.execCommand('copy');
+            iziToast.success({ title: 'Copiado', message: 'Enlace copiado al portapapeles' });
+        });
+
+        // ========== FUNCIONES AUXILIARES ==========
         function parseAmountFromLine(line) {
             line = line.toLowerCase().trim();
             let usd = 0, cup = 0;
