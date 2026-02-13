@@ -1,8 +1,8 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión final con gestión de sesiones, parseo exacto de apuestas,
-// cálculo de premios por número individual y multiplicadores configurables.
-// Teclados reorganizados en filas de 2 botones.
+// Versión final con gestión de sesiones por región (Día/Noche),
+// moment-timezone, teclados reorganizados, parseo exacto de apuestas,
+// cálculo de premios con número de 7 dígitos.
 // ==============================
 
 require('dotenv').config();
@@ -11,6 +11,7 @@ const { message } = require('telegraf/filters');
 const LocalSession = require('telegraf-session-local');
 const { createClient } = require('@supabase/supabase-js');
 const cron = require('node-cron');
+const moment = require('moment-timezone');
 
 // ========== CONFIGURACIÓN DESDE .ENV ==========
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -34,9 +35,6 @@ bot.use(localSession.middleware());
 
 // ========== FUNCIONES AUXILIARES ==========
 
-/**
- * Escapa caracteres HTML.
- */
 function escapeHTML(text) {
     if (!text) return '';
     return String(text)
@@ -47,9 +45,6 @@ function escapeHTML(text) {
         .replace(/'/g, '&#039;');
 }
 
-/**
- * Envía o edita un mensaje con parse_mode HTML.
- */
 async function safeEdit(ctx, text, keyboard = null) {
     try {
         const escapedText = escapeHTML(text);
@@ -75,9 +70,6 @@ async function safeEdit(ctx, text, keyboard = null) {
     }
 }
 
-/**
- * Obtiene o crea un usuario en Supabase.
- */
 async function getUser(telegramId, firstName = 'Jugador') {
     let { data: user } = await supabase
         .from('users')
@@ -96,9 +88,6 @@ async function getUser(telegramId, firstName = 'Jugador') {
     return user;
 }
 
-/**
- * Obtiene la tasa de cambio actual.
- */
 async function getExchangeRate() {
     const { data } = await supabase
         .from('exchange_rate')
@@ -108,9 +97,6 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
-/**
- * Parsea un string para extraer monto total en USD y CUP (ej: "10 usd", "500 cup").
- */
 function parseAmount(text) {
     const lower = text.toLowerCase().replace(',', '.').trim();
     let usd = 0, cup = 0;
@@ -121,18 +107,7 @@ function parseAmount(text) {
     return { usd, cup };
 }
 
-// ========== PARSEO DE APUESTAS (INDIVIDUAL POR LÍNEA) ==========
-
-/**
- * Parsea una línea de apuesta y devuelve { numero, usd, cup } o null si es inválida.
- * Formatos aceptados:
- *   - "12 con 5 usd"  o "12*5usd"
- *   - "12 con 2 cup"  o "12*2cup"
- *   - "12 con 1.5"   (asume USD)
- *   - "12*1.5"       (asume USD)
- * Para centenas: 123 con 2 usd, etc.
- * Para parles: 12x34 con 1 usd, etc.
- */
+// ========== PARSEO DE APUESTAS ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return null;
@@ -145,10 +120,8 @@ function parseBetLine(line, betType) {
     montoStr = match[2];
     if (match[3]) moneda = match[3];
 
-    // Validar formato según tipo
     if (betType === 'fijo' || betType === 'corridos') {
         if (!/^\d{2}$/.test(numero) && !/^[DdTt]\d$/.test(numero)) return null;
-        // Normalizar D2 → 02, T5 → 50
         if (/^[Dd](\d)$/.test(numero)) numero = '0' + numero.slice(1);
         if (/^[Tt](\d)$/.test(numero)) numero = numero.slice(1) + '0';
     } else if (betType === 'centena') {
@@ -169,10 +142,6 @@ function parseBetLine(line, betType) {
     };
 }
 
-/**
- * Parsea el mensaje completo de apuesta (varias líneas).
- * Retorna { items, totalUSD, totalCUP, ok }.
- */
 function parseBetMessage(text, betType) {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
     const items = [];
@@ -195,7 +164,21 @@ function parseBetMessage(text, betType) {
     };
 }
 
-// ========== MIDDLEWARE: CARGAR USUARIO ==========
+// ========== FUNCIÓN PARA HORA DE CIERRE ==========
+function getEndTimeFromSlot(timeSlot) {
+    const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
+    let hour, minute;
+    if (timeSlot === 'Día') {
+        hour = 12;
+        minute = 0;
+    } else { // Noche
+        hour = 23;
+        minute = 0;
+    }
+    return moment.tz(`${today} ${hour}:${minute}:00`, TIMEZONE).toDate();
+}
+
+// ========== MIDDLEWARE: USUARIO ==========
 bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (uid) {
@@ -209,12 +192,7 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// ========== TECLADOS REORGANIZADOS (FILAS DE 2 BOTONES) ==========
-
-/**
- * Construye un teclado inline con filas de hasta `cols` botones.
- * Útil para mantener consistencia.
- */
+// ========== TECLADOS REORGANIZADOS (FILAS DE 2) ==========
 function buildKeyboard(buttons, cols = 2) {
     const rows = [];
     for (let i = 0; i < buttons.length; i += cols) {
@@ -233,7 +211,6 @@ function mainMenuKbd() {
         Markup.button.callback('🔧 Admin', 'admin_panel'),
         Markup.button.webApp('🌐 Abrir WebApp', `${WEBAPP_URL}/app.html`)
     ];
-    // 2 por fila, la última fila tendrá 1 botón (WebApp solo)
     return buildKeyboard(buttons, 2);
 }
 
@@ -333,9 +310,9 @@ bot.action(/lot_(.+)/, async (ctx) => {
 
     // Horario para Georgia
     if (lotteryKey === 'georgia') {
-        const now = new Date().toLocaleString('en-US', { timeZone: TIMEZONE });
-        const hour = new Date(now).getHours();
-        const minute = new Date(now).getMinutes();
+        const now = moment.tz(TIMEZONE);
+        const hour = now.hour();
+        const minute = now.minute();
         const current = hour * 60 + minute;
         const allowed = [
             [9 * 60, 12 * 60],
@@ -350,7 +327,7 @@ bot.action(/lot_(.+)/, async (ctx) => {
     }
 
     // Verificar sesión abierta hoy
-    const today = new Date().toISOString().split('T')[0];
+    const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     const { data: activeSession } = await supabase
         .from('lottery_sessions')
         .select('*')
@@ -553,7 +530,7 @@ bot.action('my_bets', async (ctx) => {
     } else {
         let text = '📋 <b>Tus últimas 5 jugadas:</b>\n\n';
         bets.forEach((b, i) => {
-            const date = new Date(b.placed_at).toLocaleString('es-CU', { timeZone: TIMEZONE });
+            const date = moment(b.placed_at).tz(TIMEZONE).format('DD/MM/YYYY HH:mm');
             text += `<b>${i + 1}.</b> 🎰 ${escapeHTML(b.lottery)} - ${escapeHTML(b.bet_type)}\n` +
                 `   📝 <code>${escapeHTML(b.raw_text)}</code>\n` +
                 `   💰 ${b.cost_usd} USD / ${b.cost_cup} CUP\n` +
@@ -609,167 +586,177 @@ bot.action('admin_panel', async (ctx) => {
     await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
 });
 
-// ========== GESTIÓN DE SESIONES (ADMIN) ==========
+// ========== GESTIÓN DE SESIONES (NUEVO FLUJO) ==========
 bot.action('admin_sessions', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    await showSessionsMenu(ctx);
+    await showRegionsMenu(ctx);
 });
 
-async function showSessionsMenu(ctx) {
-    const today = new Date().toISOString().split('T')[0];
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+async function showRegionsMenu(ctx) {
+    const buttons = [
+        [Markup.button.callback('🦩 Florida', 'sess_region_Florida')],
+        [Markup.button.callback('🍑 Georgia', 'sess_region_Georgia')],
+        [Markup.button.callback('🗽 Nueva York', 'sess_region_Nueva York')],
+        [Markup.button.callback('◀ Volver a Admin', 'admin_panel')]
+    ];
+    await safeEdit(ctx, '🎰 <b>Gestionar sesiones</b>\n\nSelecciona una región:', Markup.inlineKeyboard(buttons));
+}
 
-    const { data: sessions } = await supabase
-        .from('lottery_sessions')
-        .select('*')
-        .in('date', [today, tomorrow])
-        .order('date', { ascending: true })
-        .order('time_slot', { ascending: true });
+bot.action(/sess_region_(.+)/, async (ctx) => {
+    if (ctx.from.id !== ADMIN_ID) return;
+    const lottery = ctx.match[1];
+    await showRegionSessions(ctx, lottery);
+});
 
-    const loterias = ['Florida', 'Georgia', 'Nueva York'];
-    const turnos = ['Mañana', 'Tarde', 'Noche'];
+async function showRegionSessions(ctx, lottery) {
+    try {
+        const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
+        const { data: sessions } = await supabase
+            .from('lottery_sessions')
+            .select('*')
+            .eq('lottery', lottery)
+            .eq('date', today);
 
-    let text = '🎰 <b>Gestión de sesiones</b>\n\n';
-    text += 'Selecciona una sesión para abrir/cerrar:\n\n';
+        const turnos = ['Día', 'Noche'];
+        let text = `🎰 <b>${lottery}</b>\n📅 ${today}\n\n`;
+        const buttons = [];
 
-    const buttons = [];
-
-    for (const lot of loterias) {
-        text += `<b>${lot}</b>\n`;
-        const row = [];
         for (const turno of turnos) {
-            const session = sessions?.find(s => s.lottery === lot && s.time_slot === turno);
-            const estado = session ? (session.status === 'open' ? '✅ ACTIVA' : '🔴 CERRADA') : '⚪ INACTIVA';
-            const btnText = `${turno} (${estado})`;
-            const callbackData = session
-                ? `toggle_session_${session.id}_${session.status}`
-                : `create_session_${lot}_${turno}`;
-            row.push(Markup.button.callback(btnText, callbackData));
-            text += `  • ${turno}: ${estado}\n`;
+            const session = sessions.find(s => s.time_slot === turno);
+            let estado, btnText, callbackData;
+            if (session) {
+                estado = session.status === 'open' ? '✅ Activa' : '🔴 Cerrada';
+                btnText = `${turno} (${estado}) - ${session.status === 'open' ? 'Cerrar' : 'Abrir'}`;
+                callbackData = `toggle_session_${session.id}_${session.status}`;
+            } else {
+                estado = '⚪ Inactiva';
+                btnText = `${turno} (${estado}) - Abrir`;
+                callbackData = `create_session_${lottery}_${turno}`;
+            }
+            buttons.push([Markup.button.callback(btnText, callbackData)]);
+            text += `• ${turno}: ${estado}\n`;
         }
-        text += '\n';
-        buttons.push(row);
+
+        buttons.push([Markup.button.callback('◀ Cambiar región', 'admin_sessions')]);
+        buttons.push([Markup.button.callback('◀ Volver a Admin', 'admin_panel')]);
+
+        await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
+    } catch (e) {
+        console.error(e);
+        await ctx.answerCbQuery('❌ Error al cargar sesiones', { show_alert: true });
     }
-
-    buttons.push([Markup.button.callback('◀ Volver a Admin', 'admin_panel')]);
-
-    await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
 }
 
 // Crear sesión
 bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    const lottery = ctx.match[1];
-    const timeSlot = ctx.match[2];
-    const today = new Date().toISOString().split('T')[0];
+    try {
+        const lottery = ctx.match[1];
+        const timeSlot = ctx.match[2];
+        const endTime = getEndTimeFromSlot(timeSlot);
 
-    let endHour, endMinute;
-    if (timeSlot === 'Mañana') { endHour = 12; endMinute = 0; }
-    else if (timeSlot === 'Tarde') { endHour = 18; endMinute = 30; }
-    else { endHour = 23; endMinute = 0; }
+        const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
 
-    const endTimeStr = `${today} ${endHour.toString().padStart(2, '0')}:${endMinute.toString().padStart(2, '0')}:00`;
-    const endTime = new Date(endTimeStr + ' ' + TIMEZONE).toISOString();
+        const { data: existing } = await supabase
+            .from('lottery_sessions')
+            .select('id')
+            .eq('lottery', lottery)
+            .eq('date', today)
+            .eq('time_slot', timeSlot)
+            .maybeSingle();
 
-    const { data: existing } = await supabase
-        .from('lottery_sessions')
-        .select('id')
-        .eq('lottery', lottery)
-        .eq('date', today)
-        .eq('time_slot', timeSlot)
-        .maybeSingle();
+        if (existing) {
+            await ctx.answerCbQuery('❌ Ya existe una sesión para este turno hoy.', { show_alert: true });
+            return;
+        }
 
-    if (existing) {
-        await ctx.answerCbQuery('❌ Ya existe una sesión para este turno hoy. Ciérrala primero.', { show_alert: true });
-        return;
+        const { error } = await supabase
+            .from('lottery_sessions')
+            .insert({
+                lottery,
+                date: today,
+                time_slot: timeSlot,
+                status: 'open',
+                end_time: endTime.toISOString()
+            });
+
+        if (error) throw error;
+
+        await ctx.answerCbQuery('✅ Sesión abierta');
+
+        // Notificar a todos los usuarios
+        const { data: users } = await supabase.from('users').select('telegram_id');
+        for (const u of users || []) {
+            try {
+                await bot.telegram.sendMessage(u.telegram_id,
+                    `📢 <b>SESIÓN ABIERTA</b>\n\n` +
+                    `🎰 <b>${escapeHTML(lottery)}</b> - Turno <b>${escapeHTML(timeSlot)}</b>\n` +
+                    `📅 Fecha: ${today}\n` +
+                    `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n\n` +
+                    `💬 ¡Ya puedes realizar tus apuestas!`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
+        }
+
+        await showRegionSessions(ctx, lottery);
+    } catch (e) {
+        console.error(e);
+        await ctx.answerCbQuery('❌ Error al abrir sesión', { show_alert: true });
     }
-
-    const { data: newSession, error } = await supabase
-        .from('lottery_sessions')
-        .insert({
-            lottery,
-            date: today,
-            time_slot: timeSlot,
-            status: 'open',
-            end_time: endTime
-        })
-        .select()
-        .single();
-
-    if (error) {
-        await ctx.answerCbQuery(`❌ Error: ${error.message}`, { show_alert: true });
-        return;
-    }
-
-    // Notificar a todos los usuarios
-    const { data: users } = await supabase.from('users').select('telegram_id');
-    for (const u of users || []) {
-        try {
-            await bot.telegram.sendMessage(u.telegram_id,
-                `📢 <b>SESIÓN ABIERTA</b>\n\n` +
-                `🎰 <b>${escapeHTML(lottery)}</b> - Turno <b>${escapeHTML(timeSlot)}</b>\n` +
-                `📅 Fecha: ${today}\n` +
-                `⏰ Cierre: ${endHour}:${endMinute.toString().padStart(2, '0')} (hora Cuba)\n\n` +
-                `💬 ¡Ya puedes realizar tus apuestas!\n` +
-                `Usa el bot o la WebApp para jugar.`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {}
-    }
-
-    await ctx.answerCbQuery('✅ Sesión abierta y notificaciones enviadas.');
-    await showSessionsMenu(ctx);
 });
 
 // Cambiar estado de sesión
 bot.action(/toggle_session_(\d+)_(.+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    const sessionId = parseInt(ctx.match[1]);
-    const currentStatus = ctx.match[2];
-    const newStatus = currentStatus === 'open' ? 'closed' : 'open';
+    try {
+        const sessionId = parseInt(ctx.match[1]);
+        const currentStatus = ctx.match[2];
+        const newStatus = currentStatus === 'open' ? 'closed' : 'open';
 
-    const { error } = await supabase
-        .from('lottery_sessions')
-        .update({ status: newStatus, updated_at: new Date() })
-        .eq('id', sessionId);
+        const { error } = await supabase
+            .from('lottery_sessions')
+            .update({ status: newStatus, updated_at: new Date() })
+            .eq('id', sessionId);
 
-    if (error) {
-        await ctx.answerCbQuery(`❌ Error: ${error.message}`, { show_alert: true });
-        return;
-    }
+        if (error) throw error;
 
-    const { data: session } = await supabase
-        .from('lottery_sessions')
-        .select('*')
-        .eq('id', sessionId)
-        .single();
+        const { data: session } = await supabase
+            .from('lottery_sessions')
+            .select('*')
+            .eq('id', sessionId)
+            .single();
 
-    if (newStatus === 'closed') {
-        const { data: bets } = await supabase
-            .from('bets')
-            .select('user_id')
-            .eq('session_id', sessionId);
+        if (newStatus === 'closed') {
+            const { data: bets } = await supabase
+                .from('bets')
+                .select('user_id')
+                .eq('session_id', sessionId);
 
-        const notified = new Set();
-        for (const bet of bets || []) {
-            if (!notified.has(bet.user_id)) {
-                try {
-                    await bot.telegram.sendMessage(bet.user_id,
-                        `⏰ <b>SESIÓN CERRADA</b>\n\n` +
-                        `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
-                        `📅 Fecha: ${session.date}\n\n` +
-                        `El tiempo para apostar ha terminado.\n` +
-                        `Pronto se publicarán los números ganadores.`,
-                        { parse_mode: 'HTML' }
-                    );
-                } catch (e) {}
-                notified.add(bet.user_id);
+            const notified = new Set();
+            for (const bet of bets || []) {
+                if (!notified.has(bet.user_id)) {
+                    try {
+                        await bot.telegram.sendMessage(bet.user_id,
+                            `⏰ <b>SESIÓN CERRADA</b>\n\n` +
+                            `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
+                            `📅 Fecha: ${session.date}\n\n` +
+                            `El tiempo para apostar ha terminado.\n` +
+                            `Pronto se publicarán los números ganadores.`,
+                            { parse_mode: 'HTML' }
+                        );
+                    } catch (e) {}
+                    notified.add(bet.user_id);
+                }
             }
         }
-    }
 
-    await ctx.answerCbQuery(newStatus === 'open' ? '✅ Sesión abierta' : '🔴 Sesión cerrada');
-    await showSessionsMenu(ctx);
+        await ctx.answerCbQuery(newStatus === 'open' ? '✅ Sesión abierta' : '🔴 Sesión cerrada');
+        await showRegionSessions(ctx, session.lottery);
+    } catch (e) {
+        console.error(e);
+        await ctx.answerCbQuery('❌ Error al cambiar estado', { show_alert: true });
+    }
 });
 
 // ========== ADMIN: AÑADIR MÉTODO DEPÓSITO ==========
@@ -777,29 +764,26 @@ bot.action('adm_add_dep', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     ctx.session.adminAction = 'add_dep';
     ctx.session.adminStep = 1;
-    await ctx.reply('➕ <b>Añadir método de DEPÓSITO</b>\n\nEscribe el <b>nombre</b> del método (ej: Tarjeta Banco Metropolitano):');
+    await ctx.reply('➕ <b>Añadir método de DEPÓSITO</b>\n\nEscribe el <b>nombre</b> del método (ej: Tarjeta Banco Metropolitano):', { parse_mode: 'HTML' });
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: AÑADIR MÉTODO RETIRO ==========
 bot.action('adm_add_wit', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     ctx.session.adminAction = 'add_wit';
     ctx.session.adminStep = 1;
-    await ctx.reply('➕ <b>Añadir método de RETIRO</b>\n\nEscribe el <b>nombre</b> del método (ej: Transfermovil):');
+    await ctx.reply('➕ <b>Añadir método de RETIRO</b>\n\nEscribe el <b>nombre</b> del método (ej: Transfermovil):', { parse_mode: 'HTML' });
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: CONFIGURAR TASA ==========
 bot.action('adm_set_rate', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const rate = await getExchangeRate();
     ctx.session.adminAction = 'set_rate';
-    await ctx.reply(`💰 <b>Tasa actual:</b> 1 USD = ${rate} CUP\n\nEnvía la <b>nueva tasa</b> (solo número, ej: 120):`);
+    await ctx.reply(`💰 <b>Tasa actual:</b> 1 USD = ${rate} CUP\n\nEnvía la <b>nueva tasa</b> (solo número, ej: 120):`, { parse_mode: 'HTML' });
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: CONFIGURAR PRECIOS Y MULTIPLICADORES ==========
 bot.action('adm_set_prices', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const { data: prices } = await supabase.from('play_prices').select('*');
@@ -807,9 +791,7 @@ bot.action('adm_set_prices', async (ctx) => {
     const rows = [];
     for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
     rows.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('🎲 <b>Configurar precios y multiplicadores</b>\nElige el tipo:',
-        Markup.inlineKeyboard(rows)
-    );
+    await ctx.reply('🎲 <b>Configurar precios y multiplicadores</b>\nElige el tipo:', Markup.inlineKeyboard(rows));
     await ctx.answerCbQuery();
 });
 
@@ -821,12 +803,12 @@ bot.action(/set_price_(.+)/, async (ctx) => {
     await ctx.reply(
         `Configurando <b>${betType}</b>\n` +
         `Envía en el formato: <code>&lt;costo_cup&gt; &lt;costo_usd&gt; &lt;multiplicador&gt;</code>\n` +
-        `Ejemplo: <code>70 0.20 500</code>`
+        `Ejemplo: <code>70 0.20 500</code>`,
+        { parse_mode: 'HTML' }
     );
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: VER DATOS ACTUALES ==========
 bot.action('adm_view', async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
     const rate = await getExchangeRate();
@@ -895,12 +877,13 @@ bot.action(/publish_win_(\d+)/, async (ctx) => {
         '• Centena: primeros 3 dígitos\n' +
         '• Fijo: últimos 2 de la centena\n' +
         '• Corridos: fijo, primeros 2 de cuarteta, últimos 2 de cuarteta\n' +
-        '• Parles: combinaciones de los corridos'
+        '• Parles: combinaciones de los corridos',
+        { parse_mode: 'HTML' }
     );
     await ctx.answerCbQuery();
 });
 
-// ========== PROCESAR NÚMERO GANADOR Y CALCULAR PREMIOS ==========
+// ========== PROCESAR NÚMERO GANADOR ==========
 async function processWinningNumber(sessionId, winningStr, ctx) {
     winningStr = winningStr.replace(/\s+/g, '');
     if (!/^\d{7}$/.test(winningStr)) {
@@ -919,7 +902,6 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         return false;
     }
 
-    // Desglose
     const centena = winningStr.slice(0, 3);
     const cuarteta = winningStr.slice(3);
     const fijo = centena.slice(1);
@@ -934,7 +916,6 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         `${corridos[1]}x${corridos[2]}`
     ];
 
-    // Guardar números ganadores
     const { error: insertError } = await supabase
         .from('winning_numbers')
         .insert({
@@ -950,7 +931,6 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         return false;
     }
 
-    // Obtener multiplicadores
     const { data: multipliers } = await supabase
         .from('play_prices')
         .select('bet_type, payout_multiplier');
@@ -958,7 +938,6 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
     const multiplierMap = {};
     multipliers.forEach(m => { multiplierMap[m.bet_type] = parseFloat(m.payout_multiplier) || 0; });
 
-    // Obtener todas las apuestas de esta sesión
     const { data: bets } = await supabase
         .from('bets')
         .select('*')
@@ -1055,12 +1034,12 @@ bot.on(message('text'), async (ctx) => {
             if (session.adminStep === 1) {
                 session.adminTempName = text;
                 session.adminStep = 2;
-                await ctx.reply('Ahora envía el <b>número de la tarjeta/cuenta</b>:');
+                await ctx.reply('Ahora envía el <b>número de la tarjeta/cuenta</b>:', { parse_mode: 'HTML' });
                 return;
             } else if (session.adminStep === 2) {
                 session.adminTempCard = text;
                 session.adminStep = 3;
-                await ctx.reply('Ahora envía el <b>número a confirmar</b> (ej: 1234):');
+                await ctx.reply('Ahora envía el <b>número a confirmar</b> (ej: 1234):', { parse_mode: 'HTML' });
                 return;
             } else if (session.adminStep === 3) {
                 const { data, error } = await supabase
@@ -1069,7 +1048,7 @@ bot.on(message('text'), async (ctx) => {
                     .select()
                     .single();
                 if (error) await ctx.reply(`❌ Error: ${error.message}`);
-                else await ctx.reply(`✅ Método de depósito <b>${escapeHTML(session.adminTempName)}</b> añadido con ID ${data.id}.`);
+                else await ctx.reply(`✅ Método de depósito <b>${escapeHTML(session.adminTempName)}</b> añadido con ID ${data.id}.`, { parse_mode: 'HTML' });
                 delete session.adminAction;
                 return;
             }
@@ -1080,12 +1059,12 @@ bot.on(message('text'), async (ctx) => {
             if (session.adminStep === 1) {
                 session.adminTempName = text;
                 session.adminStep = 2;
-                await ctx.reply('Ahora envía el <b>número o instrucción para retirar</b>:');
+                await ctx.reply('Ahora envía el <b>número o instrucción para retirar</b>:', { parse_mode: 'HTML' });
                 return;
             } else if (session.adminStep === 2) {
                 session.adminTempCard = text;
                 session.adminStep = 3;
-                await ctx.reply('Ahora envía el <b>número a confirmar</b> (o "ninguno"):');
+                await ctx.reply('Ahora envía el <b>número a confirmar</b> (o "ninguno"):', { parse_mode: 'HTML' });
                 return;
             } else if (session.adminStep === 3) {
                 const { data, error } = await supabase
@@ -1094,7 +1073,7 @@ bot.on(message('text'), async (ctx) => {
                     .select()
                     .single();
                 if (error) await ctx.reply(`❌ Error: ${error.message}`);
-                else await ctx.reply(`✅ Método de retiro <b>${escapeHTML(session.adminTempName)}</b> añadido con ID ${data.id}.`);
+                else await ctx.reply(`✅ Método de retiro <b>${escapeHTML(session.adminTempName)}</b> añadido con ID ${data.id}.`, { parse_mode: 'HTML' });
                 delete session.adminAction;
                 return;
             }
@@ -1108,7 +1087,7 @@ bot.on(message('text'), async (ctx) => {
                 return;
             }
             await supabase.from('exchange_rate').update({ rate, updated_at: new Date() }).eq('id', 1);
-            await ctx.reply(`✅ Tasa actualizada: 1 USD = ${rate} CUP`);
+            await ctx.reply(`✅ Tasa actualizada: 1 USD = ${rate} CUP`, { parse_mode: 'HTML' });
             delete session.adminAction;
             return;
         }
@@ -1117,7 +1096,7 @@ bot.on(message('text'), async (ctx) => {
         if (session.adminAction === 'set_price') {
             const parts = text.split(' ');
             if (parts.length < 3) {
-                await ctx.reply('❌ Formato inválido. Usa: <code>&lt;cup&gt; &lt;usd&gt; &lt;multiplier&gt;</code>');
+                await ctx.reply('❌ Formato inválido. Usa: <code>&lt;cup&gt; &lt;usd&gt; &lt;multiplier&gt;</code>', { parse_mode: 'HTML' });
                 return;
             }
             const cup = parseFloat(parts[0].replace(',', '.'));
@@ -1131,7 +1110,7 @@ bot.on(message('text'), async (ctx) => {
                 .from('play_prices')
                 .update({ amount_cup: cup, amount_usd: usd, payout_multiplier: multiplier, updated_at: new Date() })
                 .eq('bet_type', session.betType);
-            await ctx.reply(`✅ Precio para <b>${session.betType}</b> actualizado: ${cup} CUP / ${usd} USD  (x${multiplier})`);
+            await ctx.reply(`✅ Precio para <b>${session.betType}</b> actualizado: ${cup} CUP / ${usd} USD  (x${multiplier})`, { parse_mode: 'HTML' });
             delete session.adminAction;
             delete session.betType;
             return;
@@ -1150,12 +1129,10 @@ bot.on(message('text'), async (ctx) => {
     }
 
     // ---------- FLUJOS DE USUARIO ----------
-
-    // ----- Depósito: monto -----
     if (session.awaitingDepositAmount) {
         const { usd, cup } = parseAmount(text);
         if (usd === 0 && cup === 0) {
-            await ctx.reply('❌ Formato inválido. Envía algo como <code>10 usd</code> o <code>500 cup</code>.');
+            await ctx.reply('❌ Formato inválido. Envía algo como <code>10 usd</code> o <code>500 cup</code>.', { parse_mode: 'HTML' });
             return;
         }
 
@@ -1174,7 +1151,7 @@ bot.on(message('text'), async (ctx) => {
                     updated_at: new Date()
                 })
                 .eq('telegram_id', uid);
-            await ctx.reply(`✅ Depósito de <b>${amountUSD} USD</b> confirmado.\n🎁 Bonus añadido: +${bonusUSD} USD (no retirable).`);
+            await ctx.reply(`✅ Depósito de <b>${amountUSD} USD</b> confirmado.\n🎁 Bonus añadido: +${bonusUSD} USD (no retirable).`, { parse_mode: 'HTML' });
         } else {
             amountCUP = cup;
             const rate = await getExchangeRate();
@@ -1187,7 +1164,7 @@ bot.on(message('text'), async (ctx) => {
                     updated_at: new Date()
                 })
                 .eq('telegram_id', uid);
-            await ctx.reply(`✅ Depósito de <b>${amountCUP} CUP</b> confirmado.\n🎁 Bonus añadido: +${bonusUSD} USD (no retirable).`);
+            await ctx.reply(`✅ Depósito de <b>${amountCUP} CUP</b> confirmado.\n🎁 Bonus añadido: +${bonusUSD} USD (no retirable).`, { parse_mode: 'HTML' });
         }
 
         delete session.awaitingDepositAmount;
@@ -1195,7 +1172,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // ----- Retiro: cuenta -----
     if (session.awaitingWithdrawAccount) {
         const account = text;
         const amount = parseFloat(user.usd);
@@ -1237,7 +1213,7 @@ bot.on(message('text'), async (ctx) => {
                     ]).reply_markup
                 }
             );
-            await ctx.reply(`✅ <b>Solicitud de retiro enviada</b>\n💰 Monto: ${amount} USD\n⏳ Procesaremos tu solicitud a la mayor brevedad.`);
+            await ctx.reply(`✅ <b>Solicitud de retiro enviada</b>\n💰 Monto: ${amount} USD\n⏳ Procesaremos tu solicitud a la mayor brevedad.`, { parse_mode: 'HTML' });
         }
 
         delete session.awaitingWithdrawAccount;
@@ -1245,7 +1221,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // ----- Transferencia: destino -----
     if (session.awaitingTransferTarget) {
         const targetId = parseInt(text);
         if (isNaN(targetId)) {
@@ -1271,11 +1246,10 @@ bot.on(message('text'), async (ctx) => {
         session.transferTarget = targetId;
         session.awaitingTransferAmount = true;
         delete session.awaitingTransferTarget;
-        await ctx.reply(`Ahora envía el <b>monto en USD</b> a transferir:\n💰 Tu saldo: ${parseFloat(user.usd).toFixed(2)} USD`);
+        await ctx.reply(`Ahora envía el <b>monto en USD</b> a transferir:\n💰 Tu saldo: ${parseFloat(user.usd).toFixed(2)} USD`, { parse_mode: 'HTML' });
         return;
     }
 
-    // ----- Transferencia: monto -----
     if (session.awaitingTransferAmount) {
         const amount = parseFloat(text.replace(',', '.'));
         if (isNaN(amount) || amount <= 0) {
@@ -1304,7 +1278,7 @@ bot.on(message('text'), async (ctx) => {
             .update({ usd: parseFloat(targetUser.usd) + amount, updated_at: new Date() })
             .eq('telegram_id', targetId);
 
-        await ctx.reply(`✅ Transferencia realizada: ${amount.toFixed(2)} USD a ${targetId}.`);
+        await ctx.reply(`✅ Transferencia realizada: ${amount.toFixed(2)} USD a ${targetId}.`, { parse_mode: 'HTML' });
         delete session.transferTarget;
         delete session.awaitingTransferAmount;
         return;
@@ -1322,7 +1296,6 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // Verificar que la sesión sigue activa
         const { data: activeSession } = await supabase
             .from('lottery_sessions')
             .select('*')
@@ -1419,7 +1392,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // Si nada coincide
     await ctx.reply('No entendí ese mensaje. Por favor usa los botones del menú.',
         Markup.inlineKeyboard([[Markup.button.callback('📋 Menú principal', 'main')]])
     );
@@ -1431,63 +1403,73 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
         await ctx.answerCbQuery('No autorizado', { show_alert: true });
         return;
     }
-    const requestId = parseInt(ctx.match[1]);
-    const { data: request } = await supabase
-        .from('withdraw_requests')
-        .select('*')
-        .eq('id', requestId)
-        .single();
+    try {
+        const requestId = parseInt(ctx.match[1]);
+        const { data: request } = await supabase
+            .from('withdraw_requests')
+            .select('*')
+            .eq('id', requestId)
+            .single();
 
-    if (!request) {
-        await ctx.answerCbQuery('Solicitud no encontrada', { show_alert: true });
-        return;
+        if (!request) {
+            await ctx.answerCbQuery('Solicitud no encontrada', { show_alert: true });
+            return;
+        }
+
+        const { data: user } = await supabase
+            .from('users')
+            .select('usd')
+            .eq('telegram_id', request.user_id)
+            .single();
+
+        if (parseFloat(user.usd) < request.amount_usd) {
+            await ctx.reply('❌ El usuario ya no tiene saldo suficiente. Rechaza la solicitud.');
+            return;
+        }
+
+        await supabase
+            .from('users')
+            .update({ usd: parseFloat(user.usd) - request.amount_usd, updated_at: new Date() })
+            .eq('telegram_id', request.user_id);
+
+        await supabase
+            .from('withdraw_requests')
+            .update({ status: 'approved', updated_at: new Date() })
+            .eq('id', requestId);
+
+        await ctx.telegram.sendMessage(request.user_id,
+            `✅ <b>Retiro aprobado</b>\nSe ha procesado tu solicitud por <b>${request.amount_usd} USD</b>.\nLos fondos serán enviados a la cuenta proporcionada.`,
+            { parse_mode: 'HTML' }
+        );
+
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        await ctx.reply('✅ Retiro aprobado y saldo debitado.');
+        await ctx.answerCbQuery();
+    } catch (e) {
+        console.error(e);
+        await ctx.answerCbQuery('❌ Error al aprobar', { show_alert: true });
     }
-
-    const { data: user } = await supabase
-        .from('users')
-        .select('usd')
-        .eq('telegram_id', request.user_id)
-        .single();
-
-    if (parseFloat(user.usd) < request.amount_usd) {
-        await ctx.reply('❌ El usuario ya no tiene saldo suficiente. Rechaza la solicitud.');
-        return;
-    }
-
-    await supabase
-        .from('users')
-        .update({ usd: parseFloat(user.usd) - request.amount_usd, updated_at: new Date() })
-        .eq('telegram_id', request.user_id);
-
-    await supabase
-        .from('withdraw_requests')
-        .update({ status: 'approved', updated_at: new Date() })
-        .eq('id', requestId);
-
-    await ctx.telegram.sendMessage(request.user_id,
-        `✅ <b>Retiro aprobado</b>\nSe ha procesado tu solicitud por <b>${request.amount_usd} USD</b>.\nLos fondos serán enviados a la cuenta proporcionada.`,
-        { parse_mode: 'HTML' }
-    );
-
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.reply('✅ Retiro aprobado y saldo debitado.');
-    await ctx.answerCbQuery();
 });
 
 bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
     if (ctx.from.id !== ADMIN_ID) return;
-    const requestId = parseInt(ctx.match[1]);
-    await supabase.from('withdraw_requests').update({ status: 'rejected', updated_at: new Date() }).eq('id', requestId);
-    const { data: request } = await supabase.from('withdraw_requests').select('user_id').eq('id', requestId).single();
-    if (request) {
-        await ctx.telegram.sendMessage(request.user_id,
-            '❌ <b>Retiro rechazado</b>\nTu solicitud no pudo ser procesada.',
-            { parse_mode: 'HTML' }
-        );
+    try {
+        const requestId = parseInt(ctx.match[1]);
+        await supabase.from('withdraw_requests').update({ status: 'rejected', updated_at: new Date() }).eq('id', requestId);
+        const { data: request } = await supabase.from('withdraw_requests').select('user_id').eq('id', requestId).single();
+        if (request) {
+            await ctx.telegram.sendMessage(request.user_id,
+                '❌ <b>Retiro rechazado</b>\nTu solicitud no pudo ser procesada.',
+                { parse_mode: 'HTML' }
+            );
+        }
+        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+        await ctx.reply('❌ Retiro rechazado.');
+        await ctx.answerCbQuery();
+    } catch (e) {
+        console.error(e);
+        await ctx.answerCbQuery('❌ Error al rechazar', { show_alert: true });
     }
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.reply('❌ Retiro rechazado.');
-    await ctx.answerCbQuery();
 });
 
 // ========== CIERRE AUTOMÁTICO DE SESIONES ==========
