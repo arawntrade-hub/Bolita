@@ -521,16 +521,16 @@ bot.action(/type_(.+)/, async (ctx) => {
     ctx.session.awaitingBet = true;
     const lottery = ctx.session.lottery || 'Florida';
 
-    // Obtener precios actuales para mostrar
+    // Obtener solo el pago (multiplicador) para mostrar
     const { data: price } = await supabase
         .from('play_prices')
-        .select('amount_usd, amount_cup, payout_multiplier')
+        .select('payout_multiplier')
         .eq('bet_type', betType)
         .single();
 
     let priceInfo = '';
     if (price) {
-        priceInfo = `💰 <b>Costo base:</b> ${price.amount_usd} USD / ${price.amount_cup} CUP\n🎁 <b>Multiplicador:</b> x${price.payout_multiplier}\n\n`;
+        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n\n`;
     }
 
     let instructions = '';
