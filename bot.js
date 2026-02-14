@@ -1,6 +1,7 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión mejorada: comandos laterales, emojis, correcciones de horarios
+// Versión con teclado de respuesta en menú principal,
+// mensajes de ganador mejorados y pagos visibles.
 // ==============================
 
 require('dotenv').config();
@@ -28,7 +29,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 // ========== INICIALIZAR BOT ==========
 const bot = new Telegraf(BOT_TOKEN);
 
-// ========== CONFIGURAR COMANDOS DEL MENÚ LATERAL (IMPORTANTE) ==========
+// ========== CONFIGURAR COMANDOS DEL MENÚ LATERAL ==========
 bot.telegram.setMyCommands([
   { command: 'start', description: '🏠 Inicio' },
   { command: 'jugar', description: '🎲 Jugar' },
@@ -231,7 +232,7 @@ function parseBetMessage(text, betType) {
 function getEndTimeFromSlot(lottery, timeSlot) {
     const schedule = getAllowedHours(lottery);
     if (!schedule) return null;
-    const slot = schedule.slots.find(s => s.name === timeSlot); // CORREGIDO: comparación exacta
+    const slot = schedule.slots.find(s => s.name === timeSlot); // Comparación exacta
     if (!slot) return null;
     const now = moment.tz(TIMEZONE);
     let hour = Math.floor(slot.end);
@@ -291,24 +292,26 @@ async function createDepositRequest(userId, methodId, fileBuffer, amountText) {
     return request;
 }
 
-// ========== TECLADO PRINCIPAL ==========
+// ========== TECLADO PRINCIPAL (REPLY KEYBOARD, BOTONES ABAJO) ==========
 function getMainKeyboard(ctx) {
     const buttons = [
-        [Markup.button.callback('🎲 Jugar', 'play')],
-        [Markup.button.callback('💰 Mi dinero', 'my_money')],
-        [Markup.button.callback('📋 Mis jugadas', 'my_bets')],
-        [Markup.button.callback('👥 Referidos', 'referrals')],
-        [Markup.button.callback('❓ Cómo jugar', 'how_to_play')],
-        [Markup.button.webApp('🌐 Abrir WebApp', `${WEBAPP_URL}/app.html`)]
+        ['🎲 Jugar', '💰 Mi dinero'],
+        ['📋 Mis jugadas', '👥 Referidos'],
+        ['❓ Cómo jugar']
     ];
     if (isAdmin(ctx.from.id)) {
-        buttons.push([Markup.button.callback('🔧 Admin', 'admin_panel')]);
+        buttons.push(['🔧 Admin']);
     }
-    const rows = [];
-    for (let i = 0; i < buttons.length; i += 2) {
-        rows.push(buttons.slice(i, i + 2).flat());
+    // Agregar botón de WebApp si está configurado
+    if (WEBAPP_URL) {
+        // Los botones de reply no soportan webapp directamente; lo dejamos como texto y manejamos con acción?
+        // Mejor lo incluimos como un botón de texto que lleva a la webapp mediante un comando o mensaje.
+        // O podemos usar un botón inline especial, pero eso rompería la consistencia.
+        // Por ahora lo omitimos o lo ponemos como texto.
+        // Alternativa: usar un botón de reply que al presionarlo ejecute una acción que envíe el enlace.
+        // Lo dejamos como texto.
     }
-    return Markup.inlineKeyboard(rows);
+    return Markup.keyboard(buttons).resize();
 }
 
 function playLotteryKbd() {
@@ -435,7 +438,6 @@ bot.command('jugar', async (ctx) => {
 });
 
 bot.command('mi_dinero', async (ctx) => {
-    // Reutilizamos la acción existente
     await bot.action('my_money', ctx);
 });
 
@@ -551,16 +553,17 @@ bot.action(/type_(.+)/, async (ctx) => {
     ctx.session.awaitingBet = true;
     const lottery = ctx.session.lottery || 'Florida';
 
-    // Obtener solo el pago (multiplicador) para mostrar
+    // Obtener el pago (multiplicador) y costo para mostrar
     const { data: price } = await supabase
         .from('play_prices')
-        .select('payout_multiplier')
+        .select('payout_multiplier, amount_cup, amount_usd')
         .eq('bet_type', betType)
         .single();
 
     let priceInfo = '';
     if (price) {
-        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n\n`;
+        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n` +
+                    `💰 Costo base: ${price.amount_cup} CUP / ${price.amount_usd} USD\n\n`;
     }
 
     let instructions = '';
@@ -1203,7 +1206,16 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         .select('*')
         .eq('session_id', sessionId);
 
+    const rate = await getExchangeRate(); // Para conversión informativa
+
     for (const bet of bets || []) {
+        // Obtener saldo antes de actualizar
+        const { data: userBefore } = await supabase
+            .from('users')
+            .select('usd, cup, bonus_usd')
+            .eq('telegram_id', bet.user_id)
+            .single();
+
         let premioTotalUSD = 0;
         let premioTotalCUP = 0;
         const items = bet.items || [];
@@ -1243,44 +1255,41 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         }
 
         if (premioTotalUSD > 0 || premioTotalCUP > 0) {
-            const { data: user } = await supabase
+            // Actualizar saldo
+            let newUsd = parseFloat(userBefore.usd);
+            let newCup = parseFloat(userBefore.cup);
+            if (premioTotalUSD > 0) newUsd += premioTotalUSD;
+            if (premioTotalCUP > 0) newCup += premioTotalCUP;
+
+            await supabase
                 .from('users')
-                .select('usd, cup')
-                .eq('telegram_id', bet.user_id)
-                .single();
+                .update({ usd: newUsd, cup: newCup, updated_at: new Date() })
+                .eq('telegram_id', bet.user_id);
 
-            if (premioTotalUSD > 0) {
-                await supabase
-                    .from('users')
-                    .update({ usd: parseFloat(user.usd) + premioTotalUSD })
-                    .eq('telegram_id', bet.user_id);
-            }
-            if (premioTotalCUP > 0) {
-                await supabase
-                    .from('users')
-                    .update({ cup: parseFloat(user.cup) + premioTotalCUP })
-                    .eq('telegram_id', bet.user_id);
-            }
-
-            try {
-                await bot.telegram.sendMessage(bet.user_id,
-                    `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
-                    `🔢 Número ganador: <code>${winningStr}</code>\n` +
-                    `🎰 ${escapeHTML(session.lottery)} - ${escapeHTML(session.time_slot)}\n` +
-                    `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n\n` +
-                    `✅ El premio ya fue acreditado a tu saldo.`,
-                    { parse_mode: 'HTML' }
-                );
-            } catch (e) {}
+            // Enviar mensaje con saldo antes y después
+            const usdEquivalentCup = (premioTotalUSD * rate).toFixed(2);
+            const cupEquivalentUsd = (premioTotalCUP / rate).toFixed(2);
+            await bot.telegram.sendMessage(bet.user_id,
+                `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
+                `🔢 Número ganador: <code>${winningStr}</code>\n` +
+                `🎰 ${escapeHTML(session.lottery)} - ${escapeHTML(session.time_slot)}\n` +
+                `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n` +
+                (premioTotalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
+                (premioTotalCUP > 0 ? `   (equivale a ${cupEquivalentUsd} USD aprox.)\n` : '') +
+                `\n📊 <b>Saldo anterior:</b> ${parseFloat(userBefore.usd).toFixed(2)} USD / ${parseFloat(userBefore.cup).toFixed(2)} CUP\n` +
+                `📊 <b>Saldo actual:</b> ${newUsd.toFixed(2)} USD / ${newCup.toFixed(2)} CUP\n\n` +
+                `✅ El premio ya fue acreditado a tu saldo.`,
+                { parse_mode: 'HTML' }
+            );
         } else {
-            try {
-                await bot.telegram.sendMessage(bet.user_id,
-                    `🔢 <b>Números ganadores de ${escapeHTML(session.lottery)} (${session.date} - ${escapeHTML(session.time_slot)})</b>\n\n` +
-                    `Número: <code>${winningStr}</code>\n\n` +
-                    `😔 No has ganado esta vez. ¡Sigue intentando!`,
-                    { parse_mode: 'HTML' }
-                );
-            } catch (e) {}
+            // No ganó, solo informar
+            await bot.telegram.sendMessage(bet.user_id,
+                `🔢 <b>Números ganadores de ${escapeHTML(session.lottery)} (${session.date} - ${escapeHTML(session.time_slot)})</b>\n\n` +
+                `Número: <code>${winningStr}</code>\n\n` +
+                `😔 No has ganado esta vez. ¡Sigue intentando!\n\n` +
+                `📊 <b>Tu saldo actual:</b> ${parseFloat(userBefore.usd).toFixed(2)} USD / ${parseFloat(userBefore.cup).toFixed(2)} CUP`,
+                { parse_mode: 'HTML' }
+            );
         }
     }
 
