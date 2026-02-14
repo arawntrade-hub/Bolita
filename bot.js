@@ -15,7 +15,6 @@ const axios = require('axios');
 
 // ========== CONFIGURACIÓN DESDE .ENV ==========
 const BOT_TOKEN = process.env.BOT_TOKEN;
-// Soporte para múltiples admins: ADMIN_IDS puede ser un número o varios separados por coma
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [];
 const ADMIN_CHANNEL = process.env.ADMIN_CHANNEL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -219,17 +218,15 @@ function parseBetMessage(text, betType) {
     };
 }
 
-// Calcula la hora de cierre para un turno (Día o Noche) en el día actual.
-function getEndTimeFromSlot(timeSlot) {
+// Calcula la hora de cierre para un turno específico en una región
+function getEndTimeFromSlot(lottery, timeSlot) {
+    const schedule = getAllowedHours(lottery);
+    if (!schedule) return null;
+    const slot = schedule.slots.find(s => s.name.includes(timeSlot) || timeSlot.includes(s.name));
+    if (!slot) return null;
     const now = moment.tz(TIMEZONE);
-    let hour, minute;
-    if (timeSlot === 'Día') {
-        hour = 12;
-        minute = 0;
-    } else {
-        hour = 23;
-        minute = 0;
-    }
+    let hour = Math.floor(slot.end);
+    let minute = (slot.end % 1) * 60;
     const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
     if (now.isSameOrAfter(endTime)) {
         return null; // Ya pasó la hora de cierre
@@ -344,6 +341,7 @@ function adminPanelKbd() {
         [Markup.button.callback('➕ Añadir método RETIRO', 'adm_add_wit')],
         [Markup.button.callback('💰 Configurar tasa USD/CUP', 'adm_set_rate')],
         [Markup.button.callback('🎲 Configurar precios y pagos', 'adm_set_prices')],
+        [Markup.button.callback('💰 Mínimos por jugada', 'adm_min_per_bet')],
         [Markup.button.callback('💰 Mínimo depósito', 'adm_min_deposit')],
         [Markup.button.callback('💰 Mínimo retiro', 'adm_min_withdraw')],
         [Markup.button.callback('📋 Ver datos actuales', 'adm_view')],
@@ -489,7 +487,18 @@ bot.action(/lot_(.+)/, async (ctx) => {
         }
 
         if (!activeSession) {
-            await ctx.answerCbQuery('❌ No hay una sesión abierta para esta lotería en el día de hoy.', { show_alert: true });
+            // Mostrar horarios de la región
+            let hoursText = '';
+            for (const slot of schedule.slots) {
+                const startStr = moment().tz(TIMEZONE).hours(Math.floor(slot.start)).minutes((slot.start % 1) * 60).format('h:mm A');
+                const endStr = moment().tz(TIMEZONE).hours(Math.floor(slot.end)).minutes((slot.end % 1) * 60).format('h:mm A');
+                hoursText += `${slot.name}: ${startStr} - ${endStr}\n`;
+            }
+            const errorMsg = 
+                `❌ <b>No hay sesión abierta para ${schedule.emoji} ${schedule.name}</b>\n\n` +
+                `📅 Horarios de juego (hora de Cuba):\n${hoursText}\n` +
+                `🔄 Por favor, intenta dentro del horario o selecciona otra lotería.`;
+            await safeEdit(ctx, errorMsg, playLotteryKbd());
             return;
         }
 
@@ -512,10 +521,23 @@ bot.action(/type_(.+)/, async (ctx) => {
     ctx.session.awaitingBet = true;
     const lottery = ctx.session.lottery || 'Florida';
 
+    // Obtener precios actuales para mostrar
+    const { data: price } = await supabase
+        .from('play_prices')
+        .select('amount_usd, amount_cup, payout_multiplier')
+        .eq('bet_type', betType)
+        .single();
+
+    let priceInfo = '';
+    if (price) {
+        priceInfo = `💰 <b>Costo base:</b> ${price.amount_usd} USD / ${price.amount_cup} CUP\n🎁 <b>Multiplicador:</b> x${price.payout_multiplier}\n\n`;
+    }
+
     let instructions = '';
     switch (betType) {
         case 'fijo':
             instructions = `🎯 <b>FIJO</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                priceInfo +
                 `Escribe UNA LÍNEA por cada jugada, o varios números separados por espacios/comas en una misma línea.\n` +
                 `<b>Formato:</b> <code>12 con 5 usd</code>  o  <code>09 10 34*2cup</code>\n` +
                 `También puedes usar <b>D</b> (decena) o <b>T</b> (terminal):\n` +
@@ -526,6 +548,7 @@ bot.action(/type_(.+)/, async (ctx) => {
             break;
         case 'corridos':
             instructions = `🏃 <b>CORRIDOS</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                priceInfo +
                 `Escribe UNA LÍNEA por cada número de 2 DÍGITOS, o varios separados.\n` +
                 `<b>Formato:</b> <code>17 con 1 usd</code>  o  <code>32 33*0.5usd</code>\n\n` +
                 `Ejemplo:\n17 con 1 usd\n32 33*0.5 usd\n62 con 10 cup\n\n` +
@@ -533,6 +556,7 @@ bot.action(/type_(.+)/, async (ctx) => {
             break;
         case 'centena':
             instructions = `💯 <b>CENTENA</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                priceInfo +
                 `Escribe UNA LÍNEA por cada número de 3 DÍGITOS, o varios separados.\n` +
                 `<b>Formato:</b> <code>517 con 2 usd</code>  o  <code>019 123*1usd</code>\n\n` +
                 `Ejemplo:\n517 con 2 usd\n019 123*1 usd\n123 con 5 cup\n\n` +
@@ -540,6 +564,7 @@ bot.action(/type_(.+)/, async (ctx) => {
             break;
         case 'parle':
             instructions = `🔒 <b>PARLE</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
+                priceInfo +
                 `Escribe UNA LÍNEA por cada combinación de dos números de 2 dígitos separados por "x".\n` +
                 `<b>Formato:</b> <code>17x32 con 1 usd</code>  o  <code>17x62*2usd</code>\n\n` +
                 `Ejemplo:\n17x32 con 1 usd\n17x62*2 usd\n32x62 con 5 cup\n\n` +
@@ -774,11 +799,17 @@ async function showRegionSessions(ctx, lottery) {
             .eq('lottery', lottery)
             .eq('date', today);
 
-        const turnos = ['Día', 'Noche'];
+        const schedule = getAllowedHours(lottery.toLowerCase().replace(' ', ''));
+        if (!schedule) {
+            await ctx.answerCbQuery('❌ Región no válida', { show_alert: true });
+            return;
+        }
+
         let text = `🎰 <b>${lottery}</b>\n📅 ${today}\n\n`;
         const buttons = [];
 
-        for (const turno of turnos) {
+        for (const slot of schedule.slots) {
+            const turno = slot.name;
             const session = sessions.find(s => s.time_slot === turno);
             let estado, btnText, callbackData;
             if (session) {
@@ -810,7 +841,8 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
     try {
         const lottery = ctx.match[1];
         const timeSlot = ctx.match[2];
-        const endTime = getEndTimeFromSlot(timeSlot);
+        const lotteryKey = lottery.toLowerCase().replace(' ', '');
+        const endTime = getEndTimeFromSlot(lotteryKey, timeSlot);
         if (!endTime) {
             await ctx.answerCbQuery(`❌ La hora de cierre para el turno ${timeSlot} ya pasó hoy. No se puede abrir.`, { show_alert: true });
             return;
@@ -941,7 +973,7 @@ bot.action('adm_min_withdraw', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: CONFIGURAR PRECIOS (nuevo flujo interactivo global) ==========
+// ========== ADMIN: CONFIGURAR PRECIOS (sin mínimos) ==========
 bot.action('adm_set_prices', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const { data: prices } = await supabase.from('play_prices').select('*');
@@ -959,8 +991,32 @@ bot.action(/set_price_(.+)/, async (ctx) => {
     ctx.session.priceStep = 1; // paso 1: costos en formato cup/usd
     await ctx.reply(
         `⚙️ Configurando <b>${betType}</b> (valores globales para todas las regiones)\n\n` +
-        `Paso 1/4: Ingresa el costo en formato <b>cup/usd</b>\n` +
+        `Paso 1/3: Ingresa el costo en formato <b>cup/usd</b>\n` +
         `Ejemplo: <code>70/0.20</code>  (70 CUP y 0.20 USD)`,
+        { parse_mode: 'HTML' }
+    );
+    await ctx.answerCbQuery();
+});
+
+// ========== ADMIN: CONFIGURAR MÍNIMOS POR JUGADA ==========
+bot.action('adm_min_per_bet', async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    const { data: prices } = await supabase.from('play_prices').select('*');
+    const buttons = prices.map(p => [Markup.button.callback(p.bet_type, `set_min_${p.bet_type}`)]);
+    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
+    await ctx.reply('💰 <b>Configurar mínimos por jugada</b>\nElige el tipo de jugada:', Markup.inlineKeyboard(buttons));
+    await ctx.answerCbQuery();
+});
+
+bot.action(/set_min_(.+)/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) return;
+    const betType = ctx.match[1];
+    ctx.session.adminAction = 'set_min';
+    ctx.session.betType = betType;
+    ctx.session.minStep = 1; // paso 1: mínimo en CUP
+    await ctx.reply(
+        `⚙️ Configurando mínimos para <b>${betType}</b>\n\n` +
+        `Paso 1/2: Ingresa el <b>monto mínimo en CUP</b> (0 = sin mínimo):`,
         { parse_mode: 'HTML' }
     );
     await ctx.answerCbQuery();
@@ -1309,7 +1365,7 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // Configurar precio (nuevo flujo paso a paso con mínimos)
+        // Configurar precio (sin mínimos)
         if (session.adminAction === 'set_price') {
             if (session.priceStep === 1) {
                 // Recibimos costos en formato cup/usd
@@ -1328,7 +1384,7 @@ bot.on(message('text'), async (ctx) => {
                 session.priceTempUsd = usd;
                 session.priceStep = 2;
                 await ctx.reply(
-                    `Paso 2/4: Ingresa el <b>multiplicador de premio</b> (ej: 500).`,
+                    `Paso 2/3: Ingresa el <b>multiplicador de premio</b> (ej: 500).`,
                     { parse_mode: 'HTML' }
                 );
                 return;
@@ -1341,55 +1397,83 @@ bot.on(message('text'), async (ctx) => {
                 session.priceTempMultiplier = multiplier;
                 session.priceStep = 3;
                 await ctx.reply(
-                    `Paso 3/4: Ingresa el <b>monto mínimo en CUP</b> para esta jugada (0 = sin mínimo).`,
+                    `Paso 3/3: Confirma los valores:\n` +
+                    `💰 Costo: ${session.priceTempCup} CUP / ${session.priceTempUsd} USD\n` +
+                    `🎁 Multiplicador: x${session.priceTempMultiplier}\n\n` +
+                    `¿Guardar? Responde <b>sí</b> para confirmar o <b>no</b> para cancelar.`,
                     { parse_mode: 'HTML' }
                 );
                 return;
             } else if (session.priceStep === 3) {
-                const minCup = parseFloat(text.replace(',', '.'));
-                if (isNaN(minCup) || minCup < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
+                if (text.toLowerCase() === 'sí' || text.toLowerCase() === 'si') {
+                    const betType = session.betType;
+                    await supabase
+                        .from('play_prices')
+                        .update({
+                            amount_cup: session.priceTempCup,
+                            amount_usd: session.priceTempUsd,
+                            payout_multiplier: session.priceTempMultiplier,
+                            updated_at: new Date()
+                        })
+                        .eq('bet_type', betType);
+                    await ctx.reply(
+                        `✅ Precio para <b>${betType}</b> actualizado globalmente:\n` +
+                        `💰 Costo: ${session.priceTempCup} CUP / ${session.priceTempUsd} USD\n` +
+                        `🎁 Multiplicador: x${session.priceTempMultiplier}`,
+                        { parse_mode: 'HTML' }
+                    );
+                } else {
+                    await ctx.reply('❌ Configuración cancelada.');
                 }
-                session.priceTempMinCup = minCup;
-                session.priceStep = 4;
-                await ctx.reply(
-                    `Paso 4/4: Ingresa el <b>monto mínimo en USD</b> para esta jugada (0 = sin mínimo).`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.priceStep === 4) {
-                const minUsd = parseFloat(text.replace(',', '.'));
-                if (isNaN(minUsd) || minUsd < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                // Guardar en base de datos
-                const betType = session.betType;
-                await supabase
-                    .from('play_prices')
-                    .update({
-                        amount_cup: session.priceTempCup,
-                        amount_usd: session.priceTempUsd,
-                        payout_multiplier: session.priceTempMultiplier,
-                        min_cup: session.priceTempMinCup,
-                        min_usd: minUsd,
-                        updated_at: new Date()
-                    })
-                    .eq('bet_type', betType);
-                await ctx.reply(
-                    `✅ Precio para <b>${betType}</b> actualizado globalmente:\n` +
-                    `💰 Costo: ${session.priceTempCup} CUP / ${session.priceTempUsd} USD\n` +
-                    `🎁 Multiplicador: x${session.priceTempMultiplier}\n` +
-                    `📉 Mínimo: ${session.priceTempMinCup} CUP / ${minUsd} USD`,
-                    { parse_mode: 'HTML' }
-                );
                 delete session.adminAction;
                 delete session.priceStep;
                 delete session.priceTempCup;
                 delete session.priceTempUsd;
                 delete session.priceTempMultiplier;
-                delete session.priceTempMinCup;
+                delete session.betType;
+                return;
+            }
+        }
+
+        // Configurar mínimos por jugada
+        if (session.adminAction === 'set_min') {
+            if (session.minStep === 1) {
+                const minCup = parseFloat(text.replace(',', '.'));
+                if (isNaN(minCup) || minCup < 0) {
+                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                    return;
+                }
+                session.minTempCup = minCup;
+                session.minStep = 2;
+                await ctx.reply(
+                    `Paso 2/2: Ingresa el <b>monto mínimo en USD</b> (0 = sin mínimo):`,
+                    { parse_mode: 'HTML' }
+                );
+                return;
+            } else if (session.minStep === 2) {
+                const minUsd = parseFloat(text.replace(',', '.'));
+                if (isNaN(minUsd) || minUsd < 0) {
+                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                    return;
+                }
+                const betType = session.betType;
+                await supabase
+                    .from('play_prices')
+                    .update({
+                        min_cup: session.minTempCup,
+                        min_usd: minUsd,
+                        updated_at: new Date()
+                    })
+                    .eq('bet_type', betType);
+                await ctx.reply(
+                    `✅ Mínimos para <b>${betType}</b> actualizados:\n` +
+                    `📉 Mínimo CUP: ${session.minTempCup}\n` +
+                    `📉 Mínimo USD: ${minUsd}`,
+                    { parse_mode: 'HTML' }
+                );
+                delete session.adminAction;
+                delete session.minStep;
+                delete session.minTempCup;
                 delete session.betType;
                 return;
             }
@@ -1429,7 +1513,7 @@ bot.on(message('text'), async (ctx) => {
 
         try {
             const request = await createDepositRequest(uid, method.id, buffer, amountText);
-            // Notificar al admin (a todos los admins?)
+            // Notificar al admin (a todos los admins)
             for (const adminId of ADMIN_IDS) {
                 try {
                     await bot.telegram.sendMessage(adminId,
@@ -1933,8 +2017,66 @@ async function closeExpiredSessions() {
     }
 }
 
+// ========== APERTURA AUTOMÁTICA DE SESIONES ==========
+async function openScheduledSessions() {
+    try {
+        const now = moment.tz(TIMEZONE);
+        const today = now.format('YYYY-MM-DD');
+        const currentMinutes = now.hours() * 60 + now.minutes();
+
+        // Obtener todas las regiones
+        const regions = ['Florida', 'Georgia', 'Nueva York'];
+        for (const lottery of regions) {
+            const schedule = getAllowedHours(lottery.toLowerCase().replace(' ', ''));
+            if (!schedule) continue;
+
+            for (const slot of schedule.slots) {
+                const startMinutes = slot.start * 60;
+                // Abrir si la hora actual está dentro de los primeros 5 minutos del turno (para evitar abrir varias veces)
+                if (currentMinutes >= startMinutes && currentMinutes < startMinutes + 5) {
+                    // Verificar si ya existe una sesión abierta para hoy
+                    const { data: existing } = await supabase
+                        .from('lottery_sessions')
+                        .select('id')
+                        .eq('lottery', lottery)
+                        .eq('date', today)
+                        .eq('time_slot', slot.name)
+                        .maybeSingle();
+
+                    if (!existing) {
+                        const endTime = getEndTimeFromSlot(lottery.toLowerCase().replace(' ', ''), slot.name);
+                        if (endTime) {
+                            await supabase
+                                .from('lottery_sessions')
+                                .insert({
+                                    lottery,
+                                    date: today,
+                                    time_slot: slot.name,
+                                    status: 'open',
+                                    end_time: endTime.toISOString()
+                                });
+
+                            await broadcastToAllUsers(
+                                `🎲 <b>¡SESIÓN ABIERTA AUTOMÁTICAMENTE!</b> 🎲\n\n` +
+                                `✨ La región <b>${escapeHTML(lottery)}</b> ha abierto su turno de <b>${escapeHTML(slot.name)}</b>.\n` +
+                                `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
+                                `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
+                                `🍀 ¡La suerte te espera!`
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Error abriendo sesiones:', e);
+    }
+}
+
+// Ejecutar cada minuto
 cron.schedule('* * * * *', () => {
     closeExpiredSessions();
+    openScheduledSessions();
 }, { timezone: TIMEZONE });
 
 // ========== EXPORTAR BOT ==========
