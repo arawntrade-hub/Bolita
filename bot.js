@@ -598,8 +598,7 @@ bot.action(/type_(.+)/, async (ctx) => {
 
     let priceInfo = '';
     if (price) {
-        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n` +
-                    `💰 Costo base: ${price.amount_cup} CUP / ${price.amount_usd} USD\n\n`;
+        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n`;
     }
 
     let instructions = '';
