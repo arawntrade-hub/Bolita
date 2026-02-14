@@ -1,7 +1,6 @@
 // ==============================
 // bot.js - Bot de Telegram para Rifas Cuba
-// Versión con soporte para múltiples admins, horarios por región,
-// configuración global de precios con mínimos, y validación de horarios.
+// Versión mejorada: comandos laterales, emojis, correcciones de horarios
 // ==============================
 
 require('dotenv').config();
@@ -28,6 +27,16 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 // ========== INICIALIZAR BOT ==========
 const bot = new Telegraf(BOT_TOKEN);
+
+// ========== CONFIGURAR COMANDOS DEL MENÚ LATERAL (IMPORTANTE) ==========
+bot.telegram.setMyCommands([
+  { command: 'start', description: '🏠 Inicio' },
+  { command: 'jugar', description: '🎲 Jugar' },
+  { command: 'mi_dinero', description: '💰 Mi dinero' },
+  { command: 'mis_jugadas', description: '📋 Mis jugadas' },
+  { command: 'referidos', description: '👥 Referidos' },
+  { command: 'ayuda', description: '❓ Ayuda' }
+]).catch(err => console.error('Error al setear comandos:', err));
 
 // ========== SESIÓN LOCAL ==========
 const localSession = new LocalSession({ database: 'session_db.json' });
@@ -222,7 +231,7 @@ function parseBetMessage(text, betType) {
 function getEndTimeFromSlot(lottery, timeSlot) {
     const schedule = getAllowedHours(lottery);
     if (!schedule) return null;
-    const slot = schedule.slots.find(s => s.name.includes(timeSlot) || timeSlot.includes(s.name));
+    const slot = schedule.slots.find(s => s.name === timeSlot); // CORREGIDO: comparación exacta
     if (!slot) return null;
     const now = moment.tz(TIMEZONE);
     let hour = Math.floor(slot.end);
@@ -243,7 +252,7 @@ async function broadcastToAllUsers(message, parseMode = 'HTML') {
     for (const u of users || []) {
         try {
             await bot.telegram.sendMessage(u.telegram_id, message, { parse_mode: parseMode });
-            await new Promise(resolve => setTimeout(resolve, 30));
+            await new Promise(resolve => setTimeout(resolve, 30)); // Pequeña pausa para evitar rate limit
         } catch (e) {
             console.warn(`Error enviando broadcast a ${u.telegram_id}:`, e.message);
         }
@@ -396,8 +405,8 @@ bot.use(async (ctx, next) => {
     return next();
 });
 
-// ========== COMANDO /start ==========
-bot.start(async (ctx) => {
+// ========== COMANDOS DEL MENÚ LATERAL ==========
+bot.command('start', async (ctx) => {
     const uid = ctx.from.id;
     const firstName = ctx.from.first_name || 'Jugador';
     const refParam = ctx.payload;
@@ -421,6 +430,28 @@ bot.start(async (ctx) => {
     );
 });
 
+bot.command('jugar', async (ctx) => {
+    await safeEdit(ctx, '🎲 Selecciona una lotería:', playLotteryKbd());
+});
+
+bot.command('mi_dinero', async (ctx) => {
+    // Reutilizamos la acción existente
+    await bot.action('my_money', ctx);
+});
+
+bot.command('mis_jugadas', async (ctx) => {
+    await bot.action('my_bets', ctx);
+});
+
+bot.command('referidos', async (ctx) => {
+    await bot.action('referrals', ctx);
+});
+
+bot.command('ayuda', async (ctx) => {
+    await bot.action('how_to_play', ctx);
+});
+
+// ========== ACCIONES DE MENÚ ==========
 bot.action('main', async (ctx) => {
     const firstName = ctx.from.first_name || 'Jugador';
     await safeEdit(ctx,
@@ -432,9 +463,8 @@ bot.action('main', async (ctx) => {
     );
 });
 
-// ========== JUGAR ==========
 bot.action('play', async (ctx) => {
-    await safeEdit(ctx, 'Selecciona una lotería:', playLotteryKbd());
+    await safeEdit(ctx, '🎲 Selecciona una lotería:', playLotteryKbd());
 });
 
 bot.action(/lot_(.+)/, async (ctx) => {
@@ -505,7 +535,7 @@ bot.action(/lot_(.+)/, async (ctx) => {
         ctx.session.lottery = lotteryName;
         ctx.session.sessionId = activeSession.id;
         await safeEdit(ctx,
-            `Has seleccionado <b>${escapeHTML(lotteryName)}</b> - Turno <b>${escapeHTML(activeSession.time_slot)}</b>.\n` +
+            `✅ Has seleccionado <b>${escapeHTML(lotteryName)}</b> - Turno <b>${escapeHTML(activeSession.time_slot)}</b>.\n` +
             `Ahora elige el tipo de jugada:`,
             playTypeKbd()
         );
@@ -1787,6 +1817,9 @@ bot.on(message('text'), async (ctx) => {
             `💰 Costo total: ${totalUSD.toFixed(2)} USD / ${totalCUP.toFixed(2)} CUP\n` +
             `🍀 ¡Buena suerte!`
         );
+
+        // Ofrecer volver al menú
+        await ctx.reply('¿Qué deseas hacer ahora?', getMainKeyboard(ctx));
 
         delete session.awaitingBet;
         delete session.betType;
