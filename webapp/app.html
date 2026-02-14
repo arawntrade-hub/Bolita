@@ -98,7 +98,6 @@
             margin-right: 10px;
         }
         .file-input::file-selector-button:hover { background: #1d4ed8; }
-        /* Mejora visual para los botones de lotería */
         .lottery-btn {
             transition: transform 0.2s ease, box-shadow 0.2s ease;
             box-shadow: 0 10px 15px -3px rgba(0,0,0,0.3);
@@ -185,7 +184,7 @@
                             <span class="text-4xl mb-2 lottery-emoji">🦩</span>
                             <span class="block font-bold">Florida</span>
                         </button>
-                        <!-- Georgia: Melocotón (🍑) - se mantiene el icono original pero con emoji para consistencia? Usamos fa-peach que ya tienen, pero podemos añadir emoji también. Dejamos el icono de fontawesome que ya representa un melocotón. -->
+                        <!-- Georgia: Melocotón (🍑) -->
                         <button data-lottery="Georgia" class="lottery-btn bg-gradient-to-br from-green-600 to-teal-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition flex flex-col items-center">
                             <i class="fas fa-peach text-4xl mb-2"></i>
                             <span class="block font-bold">Georgia</span>
@@ -303,7 +302,11 @@
                         <button data-admin-view="sessions" class="admin-nav-btn bg-indigo-600/80 p-3 rounded-xl hover:bg-indigo-700"><i class="fas fa-calendar-alt mr-1"></i> Sesiones</button>
                         <button data-admin-view="publishWinning" class="admin-nav-btn bg-teal-600/80 p-3 rounded-xl hover:bg-teal-700"><i class="fas fa-trophy mr-1"></i> Publicar Ganadores</button>
                         <button data-admin-view="addDeposit" class="admin-nav-btn bg-blue-600/80 p-3 rounded-xl hover:bg-blue-700"><i class="fas fa-plus mr-1"></i> Añadir Depósito</button>
+                        <button data-admin-view="editDeposit" class="admin-nav-btn bg-cyan-600/80 p-3 rounded-xl hover:bg-cyan-700"><i class="fas fa-edit mr-1"></i> Editar Depósito</button>
+                        <button data-admin-view="deleteDeposit" class="admin-nav-btn bg-red-600/80 p-3 rounded-xl hover:bg-red-700"><i class="fas fa-trash mr-1"></i> Eliminar Depósito</button>
                         <button data-admin-view="addWithdraw" class="admin-nav-btn bg-pink-600/80 p-3 rounded-xl hover:bg-pink-700"><i class="fas fa-plus mr-1"></i> Añadir Retiro</button>
+                        <button data-admin-view="editWithdraw" class="admin-nav-btn bg-rose-600/80 p-3 rounded-xl hover:bg-rose-700"><i class="fas fa-edit mr-1"></i> Editar Retiro</button>
+                        <button data-admin-view="deleteWithdraw" class="admin-nav-btn bg-orange-600/80 p-3 rounded-xl hover:bg-orange-700"><i class="fas fa-trash mr-1"></i> Eliminar Retiro</button>
                         <button data-admin-view="setRate" class="admin-nav-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700"><i class="fas fa-dollar-sign mr-1"></i> Tasa de Cambio</button>
                         <button data-admin-view="setPrices" class="admin-nav-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700"><i class="fas fa-dice mr-1"></i> Precios y Pagos</button>
                         <button data-admin-view="setMinDeposit" class="admin-nav-btn bg-amber-600/80 p-3 rounded-xl hover:bg-amber-700"><i class="fas fa-arrow-down mr-1"></i> Mín. Depósito</button>
@@ -830,6 +833,181 @@
             } catch (e) { iziToast.error({ message: 'Error al cargar ganadores' }); }
         };
 
+        // ----- EDITAR DEPÓSITOS -----
+        async function renderEditDepositView() {
+            try {
+                const res = await fetch('/api/deposit-methods');
+                const methods = await res.json();
+                let html = `<h4 class="text-xl font-semibold mb-4">✏️ Editar métodos de DEPÓSITO</h4>`;
+                if (methods.length === 0) {
+                    html += '<p class="text-gray-400">No hay métodos registrados.</p>';
+                } else {
+                    methods.forEach(m => {
+                        html += `<div class="bg-gray-800/70 p-4 rounded-xl mb-3">
+                            <p><span class="font-bold">${escapeHTML(m.name)}</span> (ID: ${m.id})</p>
+                            <p class="text-sm">📞 ${escapeHTML(m.card)} | ✅ ${escapeHTML(m.confirm)}</p>
+                            <button onclick="editMethod('deposit', ${m.id}, '${escapeHTML(m.name)}', '${escapeHTML(m.card)}', '${escapeHTML(m.confirm)}')" class="mt-2 bg-cyan-600 px-4 py-2 rounded-lg text-sm">✏️ Editar</button>
+                        </div>`;
+                    });
+                }
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>';
+            }
+        }
+
+        window.editMethod = (type, id, name, card, confirm) => {
+            modalBody.innerHTML = `
+                <h4 class="text-xl font-bold mb-4">✏️ Editar método de ${type === 'deposit' ? 'DEPÓSITO' : 'RETIRO'}</h4>
+                <label class="block mb-2">Nombre:</label>
+                <input type="text" id="editName" value="${name}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                <label class="block mb-2">Número/Cuenta:</label>
+                <input type="text" id="editCard" value="${card}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                <label class="block mb-2">Número a confirmar:</label>
+                <input type="text" id="editConfirm" value="${confirm}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3">
+                <button onclick="updateMethod('${type}', ${id})" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Guardar cambios</button>
+                <button onclick="document.getElementById('adminModal').classList.add('hidden')" class="w-full bg-gray-600 py-2 rounded-xl mt-2">Cancelar</button>
+            `;
+            adminModal.classList.remove('hidden');
+        };
+
+        window.updateMethod = async (type, id) => {
+            const name = document.getElementById('editName').value.trim();
+            const card = document.getElementById('editCard').value.trim();
+            const confirm = document.getElementById('editConfirm').value.trim();
+            if (!name || !card || !confirm) { iziToast.warning({ message: 'Todos los campos son obligatorios' }); return; }
+            const endpoint = type === 'deposit' ? '/api/admin/deposit-methods' : '/api/admin/withdraw-methods';
+            try {
+                const res = await fetch(`${endpoint}/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, card, confirm, userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Método actualizado' });
+                    adminModal.classList.add('hidden');
+                    if (type === 'deposit') {
+                        await loadDepositMethods();
+                        renderEditDepositView();
+                    } else {
+                        await loadWithdrawMethods();
+                        renderEditWithdrawView();
+                    }
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al actualizar' });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        };
+
+        // ----- ELIMINAR DEPÓSITOS -----
+        async function renderDeleteDepositView() {
+            try {
+                const res = await fetch('/api/deposit-methods');
+                const methods = await res.json();
+                let html = `<h4 class="text-xl font-semibold mb-4">🗑 Eliminar métodos de DEPÓSITO</h4>`;
+                if (methods.length === 0) {
+                    html += '<p class="text-gray-400">No hay métodos registrados.</p>';
+                } else {
+                    methods.forEach(m => {
+                        html += `<div class="bg-gray-800/70 p-4 rounded-xl mb-3 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold">${escapeHTML(m.name)}</span> (ID: ${m.id})<br>
+                                <span class="text-xs">${escapeHTML(m.card)}</span>
+                            </div>
+                            <button onclick="confirmDelete('deposit', ${m.id})" class="bg-red-600 px-4 py-2 rounded-lg text-sm">Eliminar</button>
+                        </div>`;
+                    });
+                }
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>';
+            }
+        }
+
+        window.confirmDelete = (type, id) => {
+            modalBody.innerHTML = `
+                <h4 class="text-xl font-bold mb-4">⚠️ Confirmar eliminación</h4>
+                <p class="mb-4">¿Estás seguro de que deseas eliminar este método?</p>
+                <button onclick="deleteMethod('${type}', ${id})" class="w-full bg-red-600 py-3 rounded-xl font-semibold hover:bg-red-700 mb-2">Sí, eliminar</button>
+                <button onclick="document.getElementById('adminModal').classList.add('hidden')" class="w-full bg-gray-600 py-2 rounded-xl">Cancelar</button>
+            `;
+            adminModal.classList.remove('hidden');
+        };
+
+        window.deleteMethod = async (type, id) => {
+            const endpoint = type === 'deposit' ? '/api/admin/deposit-methods' : '/api/admin/withdraw-methods';
+            try {
+                const res = await fetch(`${endpoint}/${id}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Método eliminado' });
+                    adminModal.classList.add('hidden');
+                    if (type === 'deposit') {
+                        await loadDepositMethods();
+                        renderDeleteDepositView();
+                    } else {
+                        await loadWithdrawMethods();
+                        renderDeleteWithdrawView();
+                    }
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al eliminar' });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        };
+
+        // ----- EDITAR RETIROS (similar) -----
+        async function renderEditWithdrawView() {
+            try {
+                const res = await fetch('/api/withdraw-methods');
+                const methods = await res.json();
+                let html = `<h4 class="text-xl font-semibold mb-4">✏️ Editar métodos de RETIRO</h4>`;
+                if (methods.length === 0) {
+                    html += '<p class="text-gray-400">No hay métodos registrados.</p>';
+                } else {
+                    methods.forEach(m => {
+                        html += `<div class="bg-gray-800/70 p-4 rounded-xl mb-3">
+                            <p><span class="font-bold">${escapeHTML(m.name)}</span> (ID: ${m.id})</p>
+                            <p class="text-sm">📞 ${escapeHTML(m.card)} | ✅ ${escapeHTML(m.confirm)}</p>
+                            <button onclick="editMethod('withdraw', ${m.id}, '${escapeHTML(m.name)}', '${escapeHTML(m.card)}', '${escapeHTML(m.confirm)}')" class="mt-2 bg-cyan-600 px-4 py-2 rounded-lg text-sm">✏️ Editar</button>
+                        </div>`;
+                    });
+                }
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>';
+            }
+        }
+
+        async function renderDeleteWithdrawView() {
+            try {
+                const res = await fetch('/api/withdraw-methods');
+                const methods = await res.json();
+                let html = `<h4 class="text-xl font-semibold mb-4">🗑 Eliminar métodos de RETIRO</h4>`;
+                if (methods.length === 0) {
+                    html += '<p class="text-gray-400">No hay métodos registrados.</p>';
+                } else {
+                    methods.forEach(m => {
+                        html += `<div class="bg-gray-800/70 p-4 rounded-xl mb-3 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold">${escapeHTML(m.name)}</span> (ID: ${m.id})<br>
+                                <span class="text-xs">${escapeHTML(m.card)}</span>
+                            </div>
+                            <button onclick="confirmDelete('withdraw', ${m.id})" class="bg-red-600 px-4 py-2 rounded-lg text-sm">Eliminar</button>
+                        </div>`;
+                    });
+                }
+                adminViewContainer.innerHTML = html;
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>';
+            }
+        }
+
+        // ----- AÑADIR DEPÓSITO (existente) -----
         function renderAddDepositView() {
             adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">➕ Añadir método de DEPÓSITO</h4><input type="text" id="depName" placeholder="Nombre" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3"><input type="text" id="depCard" placeholder="Número de tarjeta" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3"><input type="text" id="depConfirm" placeholder="Número a confirmar" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-cyan-500 mb-3"><button id="saveDepositMethodBtn" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Guardar</button>`;
             document.getElementById('saveDepositMethodBtn')?.addEventListener('click', async () => {
@@ -849,6 +1027,7 @@
             });
         }
 
+        // ----- AÑADIR RETIRO (existente) -----
         function renderAddWithdrawView() {
             adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">➕ Añadir método de RETIRO</h4><input type="text" id="witName" placeholder="Nombre" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3"><input type="text" id="witCard" placeholder="Instrucción/número" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3"><input type="text" id="witConfirm" placeholder="Número a confirmar" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3"><button id="saveWithdrawMethodBtn" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Guardar</button>`;
             document.getElementById('saveWithdrawMethodBtn')?.addEventListener('click', async () => {
@@ -868,6 +1047,7 @@
             });
         }
 
+        // ----- OTRAS VISTAS ADMIN (sin cambios) -----
         function renderSetRateView() {
             adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">💰 Configurar tasa USD/CUP</h4><p class="mb-2">Tasa actual: <span class="text-cyan-300 font-bold">1 USD = ${exchangeRate} CUP</span></p><input type="number" id="newRate" value="${exchangeRate}" step="0.01" min="1" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-green-500 mb-3"><button id="updateRateBtn" class="w-full bg-green-600 py-3 rounded-xl font-semibold hover:bg-green-700">Actualizar</button>`;
             document.getElementById('updateRateBtn')?.addEventListener('click', async () => {
@@ -995,6 +1175,7 @@
             } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar datos.</p>'; }
         }
 
+        // Asignar vistas a botones admin
         adminNavBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 if (!isAdmin) return;
@@ -1002,7 +1183,11 @@
                 if (view === 'sessions') renderSessionsView();
                 else if (view === 'publishWinning') renderPublishWinningView();
                 else if (view === 'addDeposit') renderAddDepositView();
+                else if (view === 'editDeposit') renderEditDepositView();
+                else if (view === 'deleteDeposit') renderDeleteDepositView();
                 else if (view === 'addWithdraw') renderAddWithdrawView();
+                else if (view === 'editWithdraw') renderEditWithdrawView();
+                else if (view === 'deleteWithdraw') renderDeleteWithdrawView();
                 else if (view === 'setRate') renderSetRateView();
                 else if (view === 'setPrices') renderSetPricesView();
                 else if (view === 'setMinDeposit') renderSetMinDepositView();
@@ -1011,7 +1196,7 @@
             });
         });
 
-        // ---------- Manejadores de depósito, retiro, transferencia (simplificados) ----------
+        // ---------- Manejadores de depósito, retiro, transferencia ----------
         document.getElementById('rechargeBtn').addEventListener('click', () => {
             document.getElementById('rechargeSection').classList.toggle('hidden');
         });
