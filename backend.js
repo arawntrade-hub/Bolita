@@ -177,16 +177,36 @@ function parseBetMessage(text, betType) {
     };
 }
 
-function getEndTimeFromSlot(timeSlot) {
+// Calcula la hora de cierre para un turno específico en una región
+function getEndTimeFromSlot(lottery, timeSlot) {
+    const schedules = {
+        florida: {
+            slots: [
+                { name: '🌅 Mañana', end: 13 },
+                { name: '🌙 Noche', end: 21 }
+            ]
+        },
+        georgia: {
+            slots: [
+                { name: '🌅 Mañana', end: 12 },
+                { name: '☀️ Tarde', end: 18.5 },
+                { name: '🌙 Noche', end: 23 }
+            ]
+        },
+        newyork: {
+            slots: [
+                { name: '🌅 Mañana', end: 14 },
+                { name: '☀️ Tarde', end: 22 }
+            ]
+        }
+    };
+    const region = schedules[lottery];
+    if (!region) return null;
+    const slot = region.slots.find(s => s.name.includes(timeSlot) || timeSlot.includes(s.name));
+    if (!slot) return null;
     const now = moment.tz(TIMEZONE);
-    let hour, minute;
-    if (timeSlot === 'Día') {
-        hour = 12;
-        minute = 0;
-    } else {
-        hour = 23;
-        minute = 0;
-    }
+    let hour = Math.floor(slot.end);
+    let minute = (slot.end % 1) * 60;
     const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
     if (now.isSameOrAfter(endTime)) {
         return null;
@@ -320,6 +340,14 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
     }
 
     const user = await getOrCreateUser(parseInt(userId));
+    // Obtener nombre del método
+    const { data: method } = await supabase
+        .from('deposit_methods')
+        .select('name')
+        .eq('id', methodId)
+        .single();
+    const methodName = method?.name || 'Método';
+
     const fileName = `deposit_${userId}_${Date.now()}.jpg`;
     const filePath = `deposits/${fileName}`;
 
@@ -381,6 +409,13 @@ app.post('/api/withdraw-requests', async (req, res) => {
     }
 
     const user = await getOrCreateUser(parseInt(userId));
+    const { data: method } = await supabase
+        .from('withdraw_methods')
+        .select('name')
+        .eq('id', methodId)
+        .single();
+    const methodName = method?.name || 'Método';
+
     if (parseFloat(user.usd) < amount) {
         return res.status(400).json({ error: 'Saldo insuficiente' });
     }
@@ -631,10 +666,10 @@ app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
     res.json({ success: true, rate });
 });
 
-// --- Actualizar precios y multiplicadores de una jugada (global) ---
+// --- Actualizar precios de una jugada (sin mínimos) ---
 app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     const { betType } = req.params;
-    const { amount_cup, amount_usd, payout_multiplier, min_cup, min_usd } = req.body;
+    const { amount_cup, amount_usd, payout_multiplier } = req.body;
     if (amount_cup === undefined || amount_usd === undefined || payout_multiplier === undefined) {
         return res.status(400).json({ error: 'Faltan campos (amount_cup, amount_usd, payout_multiplier)' });
     }
@@ -647,8 +682,30 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
         payout_multiplier,
         updated_at: new Date()
     };
-    if (min_cup !== undefined) updateData.min_cup = min_cup;
-    if (min_usd !== undefined) updateData.min_usd = min_usd;
+
+    const { error } = await supabase
+        .from('play_prices')
+        .update(updateData)
+        .eq('bet_type', betType);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
+// --- Actualizar mínimos de una jugada ---
+app.put('/api/admin/play-prices/:betType/min', requireAdmin, async (req, res) => {
+    const { betType } = req.params;
+    const { min_cup, min_usd } = req.body;
+    if (min_cup === undefined || min_usd === undefined) {
+        return res.status(400).json({ error: 'Faltan campos (min_cup, min_usd)' });
+    }
+    if (min_cup < 0 || min_usd < 0) {
+        return res.status(400).json({ error: 'Los valores no pueden ser negativos' });
+    }
+    const updateData = {
+        min_cup,
+        min_usd,
+        updated_at: new Date()
+    };
 
     const { error } = await supabase
         .from('play_prices')
@@ -701,12 +758,10 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     if (!lottery || !time_slot) {
         return res.status(400).json({ error: 'Faltan datos' });
     }
-    if (time_slot !== 'Día' && time_slot !== 'Noche') {
-        return res.status(400).json({ error: 'Turno debe ser Día o Noche' });
-    }
 
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-    const endTime = getEndTimeFromSlot(time_slot);
+    const lotteryKey = lottery.toLowerCase().replace(' ', '');
+    const endTime = getEndTimeFromSlot(lotteryKey, time_slot);
     if (!endTime) {
         return res.status(400).json({ error: `La hora de cierre para el turno ${time_slot} ya pasó hoy. No se puede abrir.` });
     }
@@ -781,7 +836,7 @@ app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) =>
 });
 
 // --- Obtener sesiones cerradas (para publicar ganadores) ---
-app.post('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) => {
+app.get('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) => {
     const { data } = await supabase
         .from('lottery_sessions')
         .select('*')
