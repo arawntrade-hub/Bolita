@@ -638,6 +638,34 @@ app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
     res.json(data);
 });
 
+// --- Editar método de depósito ---
+app.put('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { name, card, confirm } = req.body;
+    if (!name || !card || !confirm) {
+        return res.status(400).json({ error: 'Todos los campos son obligatorios' });
+    }
+    const { data, error } = await supabase
+        .from('deposit_methods')
+        .update({ name, card, confirm, updated_at: new Date() })
+        .eq('id', id)
+        .select()
+        .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// --- Eliminar método de depósito ---
+app.delete('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { error } = await supabase
+        .from('deposit_methods')
+        .delete()
+        .eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
 // --- Añadir método de retiro ---
 app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
     const { name, card, confirm } = req.body;
@@ -651,6 +679,34 @@ app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
         .single();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
+});
+
+// --- Editar método de retiro ---
+app.put('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { name, card, confirm } = req.body;
+    if (!name || !card) {
+        return res.status(400).json({ error: 'Nombre e instrucción son obligatorios' });
+    }
+    const { data, error } = await supabase
+        .from('withdraw_methods')
+        .update({ name, card, confirm: confirm || 'ninguno', updated_at: new Date() })
+        .eq('id', id)
+        .select()
+        .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// --- Eliminar método de retiro ---
+app.delete('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { error } = await supabase
+        .from('withdraw_methods')
+        .delete()
+        .eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
 });
 
 // --- Actualizar tasa de cambio ---
