@@ -2405,11 +2405,11 @@ async function closeExpiredSessions() {
                 .eq('id', session.id);
 
             await broadcastToAllUsers(
-                `⏰ <b>SESIÓN CERRADA AUTOMÁTICAMENTE</b>\n\n` +
+                `🔴 <b>SESIÓN CERRADA</b>\n\n` +
                 `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
                 `📅 Fecha: ${session.date}\n\n` +
-                `❌ El tiempo para apostar ha finalizado.\n` +
-                `🔢 Pronto se publicará el número ganador. ¡Gracias por participar y mucha suerte!`
+                `❌ Ya no se reciben más apuestas para esta sesión.\n` +
+                `🔢 Pronto anunciaremos el número ganador. ¡Mantente atento!`
             );
         }
     } catch (e) {
@@ -2453,7 +2453,7 @@ async function openScheduledSessions() {
                                 });
 
                             await broadcastToAllUsers(
-                                `🎲 <b>¡SESIÓN ABIERTA AUTOMÁTICAMENTE!</b> 🎲\n\n` +
+                                `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
                                 `✨ La región <b>${escapeHTML(lottery)}</b> ha abierto su turno de <b>${escapeHTML(slot.name)}</b>.\n` +
                                 `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
                                 `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
