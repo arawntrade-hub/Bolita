@@ -226,18 +226,28 @@ function parseBetMessage(text, betType) {
     };
 }
 
+// ========== FUNCIÓN CORREGIDA ==========
 function getEndTimeFromSlot(lottery, timeSlot) {
     const schedule = getAllowedHours(lottery);
     if (!schedule) return null;
     const slot = schedule.slots.find(s => s.name === timeSlot);
     if (!slot) return null;
+    
     const now = moment.tz(TIMEZONE);
+    const today = now.format('YYYY-MM-DD');
+    
+    // Crear la hora de cierre para HOY a la hora específica del slot
     let hour = Math.floor(slot.end);
     let minute = (slot.end % 1) * 60;
-    const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
+    
+    // Crear el momento de cierre para hoy a esa hora
+    const endTime = moment.tz(`${today} ${hour}:${minute}:00`, 'YYYY-MM-DD HH:mm:ss', TIMEZONE);
+    
+    // Si la hora de cierre ya pasó hoy, devolver null (no se puede abrir)
     if (now.isSameOrAfter(endTime)) {
         return null;
     }
+    
     return endTime.toDate();
 }
 
@@ -602,7 +612,8 @@ bot.action(/type_(.+)/, async (ctx) => {
 
     let priceInfo = '';
     if (price) {
-        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n`;
+        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n` +
+                    `💰 Costo base: ${price.amount_cup} CUP / ${price.amount_usd} USD\n\n`;
     }
 
     let instructions = '';
