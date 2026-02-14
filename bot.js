@@ -602,7 +602,7 @@ bot.action(/type_(.+)/, async (ctx) => {
 
     let priceInfo = '';
     if (price) {
-        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n`+;
+        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n`;
     }
 
     let instructions = '';
