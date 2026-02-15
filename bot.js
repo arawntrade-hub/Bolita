@@ -3,6 +3,7 @@
 // Versión con teclado de respuesta funcional y botón WebApp
 // Mejoras: horario retiros, bono no retirable, mensajes más atentos
 // Funcionalidades: editar/eliminar métodos de pago, bono de bienvenida
+// CORRECCIÓN: Depósitos en CUP ahora validan mínimo correctamente y se acreditan ambas monedas
 // ==============================
 
 require('dotenv').config();
@@ -732,7 +733,7 @@ bot.action('recharge', async (ctx) => {
     await safeEdit(ctx,
         `💵 <b>Recargar saldo</b>\n\n` +
         `Elige un método de pago. Luego deberás enviar una captura de pantalla de la transferencia realizada.\n\n` +
-        `<b>Mínimo de depósito:</b> ${minDeposit} USD\n` +
+        `<b>Mínimo de depósito:</b> ${minDeposit} USD (o su equivalente en CUP)\n` +
         `<b>Tasa de cambio:</b> 1 USD = ${rate} CUP\n\n` +
         `Selecciona el método:`,
         Markup.inlineKeyboard(buttons)
@@ -1947,10 +1948,24 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        const { usd } = parseAmount(amountText);
+        const { usd, cup } = parseAmount(amountText);
         const minDeposit = await getMinDepositUSD();
-        if (usd < minDeposit) {
-            await ctx.reply(`❌ El monto mínimo de depósito es ${minDeposit} USD. Por favor, envía un monto válido.`, getMainKeyboard(ctx));
+        const rate = await getExchangeRate();
+
+        // Validar monto mínimo según la moneda
+        if (usd > 0) {
+            if (usd < minDeposit) {
+                await ctx.reply(`❌ El monto mínimo de depósito en USD es ${minDeposit} USD. Por favor, envía un monto válido.`, getMainKeyboard(ctx));
+                return;
+            }
+        } else if (cup > 0) {
+            const usdEquiv = cup / rate;
+            if (usdEquiv < minDeposit) {
+                await ctx.reply(`❌ El monto mínimo de depósito en CUP es ${(minDeposit * rate).toFixed(2)} CUP (equivalente a ${minDeposit} USD). Por favor, envía un monto válido.`, getMainKeyboard(ctx));
+                return;
+            }
+        } else {
+            await ctx.reply('❌ No se pudo interpretar el monto. Debes especificar la moneda (ej: 10 usd o 500 cup).', getMainKeyboard(ctx));
             return;
         }
 
@@ -2291,26 +2306,44 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
         }
 
         const { usd, cup } = parseAmount(request.amount);
-        const user = await getUser(request.user_id);
-        let updateData = { updated_at: new Date() };
+        const rate = await getExchangeRate();
+
+        // Obtener usuario
+        const { data: user } = await supabase
+            .from('users')
+            .select('usd, cup, bonus_usd')
+            .eq('telegram_id', request.user_id)
+            .single();
+
+        if (!user) {
+            await ctx.answerCbQuery('Usuario no encontrado', { show_alert: true });
+            return;
+        }
+
+        // Calcular montos a acreditar (siempre se acreditan ambas monedas según la tasa)
+        let addUsd = 0, addCup = 0;
         if (usd > 0) {
-            const rate = await getExchangeRate();
-            const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
-            updateData.usd = parseFloat(user.usd) + usd;
-            updateData.bonus_usd = parseFloat(user.bonus_usd) + bonusUSD;
+            addUsd = usd;
+            addCup = usd * rate;
         } else if (cup > 0) {
-            const rate = await getExchangeRate();
-            const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
-            updateData.cup = parseFloat(user.cup) + cup;
-            updateData.bonus_usd = parseFloat(user.bonus_usd) + bonusUSD;
+            addCup = cup;
+            addUsd = cup / rate;
         } else {
             await ctx.answerCbQuery('Monto no válido en la solicitud', { show_alert: true });
             return;
         }
 
+        // Redondear a 2 decimales
+        addUsd = parseFloat(addUsd.toFixed(2));
+        addCup = parseFloat(addCup.toFixed(2));
+
+        const newUsd = parseFloat(user.usd) + addUsd;
+        const newCup = parseFloat(user.cup) + addCup;
+
+        // Actualizar usuario (sin añadir bono extra)
         await supabase
             .from('users')
-            .update(updateData)
+            .update({ usd: newUsd, cup: newCup, updated_at: new Date() })
             .eq('telegram_id', request.user_id);
 
         await supabase
@@ -2318,8 +2351,14 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
             .update({ status: 'approved', updated_at: new Date() })
             .eq('id', requestId);
 
+        // Notificar al usuario
         await ctx.telegram.sendMessage(request.user_id,
-            `✅ <b>Depósito aprobado</b>\nSe ha acreditado <b>${request.amount}</b> a tu saldo.\n🎁 Además, has recibido un bono adicional.\n\n¡Gracias por confiar en nosotros!`,
+            `✅ <b>Depósito aprobado</b>\n\n` +
+            `💰 Monto depositado: ${request.amount}\n` +
+            `💵 Se acreditaron:\n` +
+            `   USD: +${addUsd.toFixed(2)}\n` +
+            `   CUP: +${addCup.toFixed(2)}\n\n` +
+            `¡Gracias por confiar en nosotros!`,
             { parse_mode: 'HTML' }
         );
 
@@ -2382,7 +2421,7 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
 
         const { data: user } = await supabase
             .from('users')
-            .select('usd')
+            .select('usd, cup')
             .eq('telegram_id', request.user_id)
             .single();
 
@@ -2391,9 +2430,17 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
             return;
         }
 
+        const rate = await getExchangeRate();
+        const amountUsd = request.amount_usd;
+        const amountCup = amountUsd * rate;
+
+        // Restar de ambos saldos
+        const newUsd = parseFloat(user.usd) - amountUsd;
+        const newCup = parseFloat(user.cup) - amountCup;
+
         await supabase
             .from('users')
-            .update({ usd: parseFloat(user.usd) - request.amount_usd, updated_at: new Date() })
+            .update({ usd: newUsd, cup: newCup, updated_at: new Date() })
             .eq('telegram_id', request.user_id);
 
         await supabase
@@ -2402,7 +2449,12 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
             .eq('id', requestId);
 
         await ctx.telegram.sendMessage(request.user_id,
-            `✅ <b>Retiro aprobado</b>\nSe ha procesado tu solicitud por <b>${request.amount_usd} USD</b>.\nLos fondos serán enviados a la cuenta proporcionada en breve.`,
+            `✅ <b>Retiro aprobado</b>\n\n` +
+            `💰 Monto retirado: ${amountUsd} USD\n` +
+            `💵 Se descontaron:\n` +
+            `   USD: -${amountUsd.toFixed(2)}\n` +
+            `   CUP: -${amountCup.toFixed(2)}\n\n` +
+            `Los fondos serán enviados a la cuenta proporcionada en breve.`,
             { parse_mode: 'HTML' }
         );
 
