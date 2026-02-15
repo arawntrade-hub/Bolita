@@ -1,5 +1,5 @@
 // ==============================
-// bot.js - Bot de Telegram para Rifas Cuba
+// bot.js - Bot de Telegram para 4pu3$t4$_Qva
 // Versión con teclado de respuesta funcional y botón WebApp
 // Mejoras: horario retiros, bono no retirable, mensajes más atentos
 // Funcionalidades: editar/eliminar métodos de pago
@@ -237,9 +237,18 @@ function parseBetMessage(text, betType) {
     };
 }
 
+// Mapa para convertir nombres de lotería a claves internas
+const regionKeyMap = {
+    'Florida': 'florida',
+    'Georgia': 'georgia',
+    'Nueva York': 'newyork'
+};
+
 // ========== FUNCIÓN CORREGIDA ==========
 function getEndTimeFromSlot(lottery, timeSlot) {
-    const schedule = getAllowedHours(lottery);
+    const lotteryKey = regionKeyMap[lottery];
+    if (!lotteryKey) return null;
+    const schedule = getAllowedHours(lotteryKey);
     if (!schedule) return null;
     const slot = schedule.slots.find(s => s.name === timeSlot);
     if (!slot) return null;
@@ -432,7 +441,7 @@ bot.command('start', async (ctx) => {
     }
 
     await safeEdit(ctx,
-        `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido de nuevo a Rifas Cuba, tu asistente de la suerte 🍀\n\n` +
+        `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido de nuevo a 4pu3$t4$_Qva, tu asistente de la suerte 🍀\n\n` +
         `Estamos encantados de tenerte aquí. ¿Listo para jugar y ganar? 🎲\n\n` +
         `Usa los botones del menú para explorar todas las opciones. Si tienes dudas, solo escríbenos.`,
         getMainKeyboard(ctx)
@@ -445,9 +454,12 @@ bot.command('jugar', async (ctx) => {
 
 bot.command('mi_dinero', async (ctx) => {
     const user = ctx.dbUser;
+    const rate = await getExchangeRate();
+    const usdToCup = (parseFloat(user.usd) * rate).toFixed(2);
+    const cupToUsd = (parseFloat(user.cup) / rate).toFixed(2);
     const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-        `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)}\n` +
-        `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)}\n` +
+        `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
+        `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
         `🎁 <b>Bono (no retirable, solo para jugar):</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD\n\n` +
         `¿Qué deseas hacer con tu dinero?`;
     await safeEdit(ctx, text, myMoneyKbd());
@@ -541,8 +553,8 @@ bot.action('play', async (ctx) => {
 bot.action(/lot_(.+)/, async (ctx) => {
     try {
         const lotteryKey = ctx.match[1];
+        const lotteryName = lotteryKey === 'florida' ? 'Florida' : lotteryKey === 'georgia' ? 'Georgia' : 'Nueva York';
         const schedule = getAllowedHours(lotteryKey);
-        const lotteryName = schedule.name;
 
         console.log(`Jugador ${ctx.from.id} seleccionó lotería ${lotteryName}`);
 
@@ -675,9 +687,12 @@ bot.action(/type_(.+)/, async (ctx) => {
 
 bot.action('my_money', async (ctx) => {
     const user = ctx.dbUser;
+    const rate = await getExchangeRate();
+    const usdToCup = (parseFloat(user.usd) * rate).toFixed(2);
+    const cupToUsd = (parseFloat(user.cup) / rate).toFixed(2);
     const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-        `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)}\n` +
-        `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)}\n` +
+        `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
+        `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
         `🎁 <b>Bono (no retirable, solo para jugar):</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD\n\n` +
         `¿Qué te gustaría hacer?`;
     await safeEdit(ctx, text, myMoneyKbd());
@@ -909,7 +924,8 @@ async function showRegionSessions(ctx, lottery) {
             .eq('lottery', lottery)
             .eq('date', today);
 
-        const schedule = getAllowedHours(lottery.toLowerCase().replace(' ', ''));
+        const lotteryKey = regionKeyMap[lottery];
+        const schedule = getAllowedHours(lotteryKey);
         if (!schedule) {
             await ctx.answerCbQuery('❌ Región no válida', { show_alert: true });
             return;
@@ -950,8 +966,7 @@ bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
     try {
         const lottery = ctx.match[1];
         const timeSlot = ctx.match[2];
-        const lotteryKey = lottery.toLowerCase().replace(' ', '');
-        const endTime = getEndTimeFromSlot(lotteryKey, timeSlot);
+        const endTime = getEndTimeFromSlot(lottery, timeSlot);
         if (!endTime) {
             await ctx.answerCbQuery(`❌ La hora de cierre para el turno ${timeSlot} ya pasó hoy. No se puede abrir.`, { show_alert: true });
             return;
@@ -1580,9 +1595,12 @@ bot.on(message('text'), async (ctx) => {
             return;
         } else if (text === '💰 Mi dinero') {
             const user = ctx.dbUser;
+            const rate = await getExchangeRate();
+            const usdToCup = (parseFloat(user.usd) * rate).toFixed(2);
+            const cupToUsd = (parseFloat(user.cup) / rate).toFixed(2);
             const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-                `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)}\n` +
-                `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)}\n` +
+                `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
+                `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
                 `🎁 <b>Bono (no retirable, solo para jugar):</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD\n\n` +
                 `¿Qué deseas hacer?`;
             await safeEdit(ctx, text, myMoneyKbd());
@@ -1683,6 +1701,8 @@ bot.on(message('text'), async (ctx) => {
         delete session.editMethodType;
         delete session.editStep;
         delete session.editField;
+        // Volver al panel de admin
+        await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
         return;
     }
 
@@ -1708,6 +1728,7 @@ bot.on(message('text'), async (ctx) => {
                 if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
                 else await ctx.reply(`✅ Método de depósito <b>${escapeHTML(session.adminTempName)}</b> añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
                 delete session.adminAction;
+                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
                 return;
             }
         }
@@ -1732,6 +1753,7 @@ bot.on(message('text'), async (ctx) => {
                 if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
                 else await ctx.reply(`✅ Método de retiro <b>${escapeHTML(session.adminTempName)}</b> añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
                 delete session.adminAction;
+                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
                 return;
             }
         }
@@ -1745,6 +1767,7 @@ bot.on(message('text'), async (ctx) => {
             await supabase.from('exchange_rate').update({ rate, updated_at: new Date() }).eq('id', 1);
             await ctx.reply(`✅ Tasa actualizada correctamente: 1 USD = ${rate} CUP`, { parse_mode: 'HTML' });
             delete session.adminAction;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
             return;
         }
 
@@ -1757,6 +1780,7 @@ bot.on(message('text'), async (ctx) => {
             await setMinDepositUSD(value);
             await ctx.reply(`✅ Mínimo de depósito actualizado a: ${value} USD`, { parse_mode: 'HTML' });
             delete session.adminAction;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
             return;
         }
 
@@ -1769,6 +1793,7 @@ bot.on(message('text'), async (ctx) => {
             await setMinWithdrawUSD(value);
             await ctx.reply(`✅ Mínimo de retiro actualizado a: ${value} USD`, { parse_mode: 'HTML' });
             delete session.adminAction;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
             return;
         }
 
@@ -1836,6 +1861,7 @@ bot.on(message('text'), async (ctx) => {
                 delete session.priceTempUsd;
                 delete session.priceTempMultiplier;
                 delete session.betType;
+                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
                 return;
             }
         }
@@ -1879,6 +1905,7 @@ bot.on(message('text'), async (ctx) => {
                 delete session.minStep;
                 delete session.minTempCup;
                 delete session.betType;
+                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
                 return;
             }
         }
@@ -1889,6 +1916,7 @@ bot.on(message('text'), async (ctx) => {
             if (success) {
                 delete session.adminAction;
                 delete session.winningSessionId;
+                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
             }
             return;
         }
@@ -2175,12 +2203,18 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
+        const rate = await getExchangeRate();
+        const usdEquivalentCup = (totalUSD * rate).toFixed(2);
+        const cupEquivalentUsd = (totalCUP / rate).toFixed(2);
+
         await ctx.replyWithHTML(
             `✅ <b>Jugada registrada exitosamente</b>\n` +
             `🎰 ${escapeHTML(lottery)} - ${escapeHTML(betType)}\n` +
             `📝 <code>${escapeHTML(text)}</code>\n` +
-            `💰 Costo total: ${totalUSD.toFixed(2)} USD / ${totalCUP.toFixed(2)} CUP\n\n` +
-            `🍀 ¡Mucha suerte! Esperamos que seas el próximo ganador.`
+            `💰 Costo total: ${totalUSD.toFixed(2)} USD / ${totalCUP.toFixed(2)} CUP\n` +
+            (totalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
+            (totalCUP > 0 ? `   (equivale a ${cupEquivalentUsd} USD aprox.)\n` : '') +
+            `\n🍀 ¡Mucha suerte! Esperamos que seas el próximo ganador.`
         );
 
         await ctx.reply('¿Qué deseas hacer ahora?', getMainKeyboard(ctx));
@@ -2425,7 +2459,8 @@ async function openScheduledSessions() {
 
         const regions = ['Florida', 'Georgia', 'Nueva York'];
         for (const lottery of regions) {
-            const schedule = getAllowedHours(lottery.toLowerCase().replace(' ', ''));
+            const lotteryKey = regionKeyMap[lottery];
+            const schedule = getAllowedHours(lotteryKey);
             if (!schedule) continue;
 
             for (const slot of schedule.slots) {
@@ -2440,7 +2475,7 @@ async function openScheduledSessions() {
                         .maybeSingle();
 
                     if (!existing) {
-                        const endTime = getEndTimeFromSlot(lottery.toLowerCase().replace(' ', ''), slot.name);
+                        const endTime = getEndTimeFromSlot(lottery, slot.name);
                         if (endTime) {
                             await supabase
                                 .from('lottery_sessions')
@@ -2469,9 +2504,35 @@ async function openScheduledSessions() {
     }
 }
 
+// Recordatorios de retiro
+async function withdrawReminder() {
+    const now = moment.tz(TIMEZONE);
+    const currentHour = now.hour() + now.minute() / 60;
+
+    // 5 minutos antes de abrir (21:55)
+    if (currentHour >= 21.9167 && currentHour < 22) {
+        await broadcastToAllUsers(
+            `⏰ <b>Recordatorio de Retiros</b>\n\n` +
+            `Los retiros estarán disponibles en 5 minutos, de 10:00 PM a 11:30 PM (hora Cuba).\n` +
+            `Asegúrate de tener saldo USD disponible y tus datos de cuenta listos.`,
+            'HTML'
+        );
+    }
+    // 5 minutos antes de cerrar (23:25)
+    if (currentHour >= 23.4167 && currentHour < 23.5) {
+        await broadcastToAllUsers(
+            `⏰ <b>Última llamada para Retiros</b>\n\n` +
+            `La ventana de retiros se cerrará en 5 minutos (11:30 PM hora Cuba).\n` +
+            `Si deseas retirar, hazlo ahora.`,
+            'HTML'
+        );
+    }
+}
+
 cron.schedule('* * * * *', () => {
     closeExpiredSessions();
     openScheduledSessions();
+    withdrawReminder();
 }, { timezone: TIMEZONE });
 
 module.exports = bot;
