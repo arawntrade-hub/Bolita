@@ -129,12 +129,21 @@
             font-size: 0.8rem;
             margin-left: 5px;
         }
+        .balance-small {
+            font-size: 0.75rem;
+            line-height: 1rem;
+            color: #9ca3af;
+        }
+        .balance-main {
+            font-size: 1rem;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body class="p-4 md:p-6">
 
 <div id="app" class="max-w-4xl mx-auto relative">
-    <!-- Header con nuevo nombre -->
+    <!-- Header con nuevo nombre y saldo CUP principal -->
     <div class="flex items-center justify-between mb-6">
         <div class="flex items-center space-x-3">
             <div class="w-12 h-12 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 flex items-center justify-center shadow-lg">
@@ -146,10 +155,13 @@
             </div>
         </div>
         <div class="glass-card px-4 py-2 flex items-center space-x-2">
-    <i class="fas fa-coins text-yellow-400"></i>
-    <span id="quickBalance" class="font-semibold text-white">0.00 CUP</span>
-    <span id="quickBalanceUsd" class="text-xs text-gray-300">≈ 0.00 USD</span>
+            <i class="fas fa-coins text-yellow-400"></i>
+            <div class="flex flex-col items-end">
+                <span id="quickBalance" class="balance-main text-white">0.00 CUP</span>
+                <span id="quickBalanceUsd" class="balance-small">≈ 0.00 USD</span>
+            </div>
         </div>
+    </div>
 
     <!-- Loader principal -->
     <div id="globalLoader" class="flex justify-center items-center py-20">
@@ -204,7 +216,7 @@
                             <span class="text-4xl mb-2 lottery-emoji">🦩</span>
                             <span class="block font-bold">Florida</span>
                         </button>
-                        <!-- Georgia: Melocotón (🍑) - Ahora con emoji en lugar de icono -->
+                        <!-- Georgia: Melocotón (🍑) -->
                         <button data-lottery="Georgia" class="lottery-btn bg-gradient-to-br from-green-600 to-teal-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition flex flex-col items-center">
                             <span class="text-4xl mb-2 lottery-emoji">🍑</span>
                             <span class="block font-bold">Georgia</span>
@@ -329,7 +341,7 @@
                 </div>
             </div>
 
-            <!-- SECCIÓN ADMIN (con opciones completas) -->
+            <!-- SECCIÓN ADMIN -->
             <div id="section-admin" class="section hidden-section">
                 <div class="glass-card p-5">
                     <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-crown text-yellow-400 mr-2"></i>Panel Admin</h3>
@@ -637,26 +649,26 @@
             }
         }
 
-        // Funciones auxiliares
+        // ---------- FUNCIÓN updateBalanceUI MODIFICADA ----------
         function updateBalanceUI() {
-    if (!currentUser) return;
-    const usd = parseFloat(currentUser.usd);
-    const cup = parseFloat(currentUser.cup);
-    const bonus = parseFloat(currentUser.bonus_usd);
-    const usdToCup = (usd * exchangeRate).toFixed(2);
-    const cupToUsd = (cup / exchangeRate).toFixed(2);
-    
-    // Header
-    document.getElementById('quickBalance').innerText = `${cup.toFixed(2)} CUP`;
-    document.getElementById('quickBalanceUsd').innerText = `≈ ${cupToUsd} USD`;
-    
-    // Sección Mi dinero
-    document.getElementById('walletUsd').innerText = usd.toFixed(2);
-    document.getElementById('walletUsdEquivalent').innerText = `(≈ ${usdToCup} CUP)`;
-    document.getElementById('walletCup').innerText = cup.toFixed(2);
-    document.getElementById('walletCupEquivalent').innerText = `(≈ ${cupToUsd} USD)`;
-    document.getElementById('walletBonus').innerText = `${bonus.toFixed(2)} USD`;
-}
+            if (!currentUser) return;
+            const usd = parseFloat(currentUser.usd);
+            const cup = parseFloat(currentUser.cup);
+            const bonus = parseFloat(currentUser.bonus_usd);
+            const usdToCup = (usd * exchangeRate).toFixed(2);
+            const cupToUsd = (cup / exchangeRate).toFixed(2);
+            
+            // Header
+            document.getElementById('quickBalance').innerText = `${cup.toFixed(2)} CUP`;
+            document.getElementById('quickBalanceUsd').innerText = `≈ ${cupToUsd} USD`;
+            
+            // Sección Mi dinero
+            document.getElementById('walletUsd').innerText = usd.toFixed(2);
+            document.getElementById('walletUsdEquivalent').innerText = `(≈ ${usdToCup} CUP)`;
+            document.getElementById('walletCup').innerText = cup.toFixed(2);
+            document.getElementById('walletCupEquivalent').innerText = `(≈ ${cupToUsd} USD)`;
+            document.getElementById('walletBonus').innerText = `${bonus.toFixed(2)} USD`;
+        }
 
         async function loadDepositMethods() {
             try {
