@@ -2,7 +2,7 @@
 // bot.js - Bot de Telegram para 4pu3$t4$_Qva
 // Versión con teclado de respuesta funcional y botón WebApp
 // Mejoras: horario retiros, bono no retirable, mensajes más atentos
-// Funcionalidades: editar/eliminar métodos de pago
+// Funcionalidades: editar/eliminar métodos de pago, bono de bienvenida
 // ==============================
 
 require('dotenv').config();
@@ -20,7 +20,7 @@ const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(i
 const ADMIN_CHANNEL = process.env.ADMIN_CHANNEL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const BONUS_CUP_DEFAULT = parseFloat(process.env.BONUS_CUP_DEFAULT) || 70;
+const BONUS_CUP_DEFAULT = parseFloat(process.env.BONUS_CUP_DEFAULT) || 70; // Bono en CUP que se convertirá a USD
 const TIMEZONE = process.env.TIMEZONE || 'America/Havana';
 const WEBAPP_URL = process.env.WEBAPP_URL || 'http://localhost:3000';
 
@@ -95,6 +95,16 @@ async function safeEdit(ctx, text, keyboard = null) {
     }
 }
 
+async function getExchangeRate() {
+    const { data } = await supabase
+        .from('exchange_rate')
+        .select('rate')
+        .eq('id', 1)
+        .single();
+    return data?.rate || 110;
+}
+
+// ========== FUNCIÓN GETUSER MODIFICADA PARA AÑADIR BONO DE BIENVENIDA ==========
 async function getUser(telegramId, firstName = 'Jugador') {
     let { data: user } = await supabase
         .from('users')
@@ -103,23 +113,32 @@ async function getUser(telegramId, firstName = 'Jugador') {
         .single();
 
     if (!user) {
+        // Calcular bono de bienvenida en USD según la tasa actual
+        const rate = await getExchangeRate();
+        const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
+
         const { data: newUser } = await supabase
             .from('users')
-            .insert({ telegram_id: telegramId, first_name: firstName })
+            .insert({ 
+                telegram_id: telegramId, 
+                first_name: firstName,
+                bonus_usd: bonusUSD 
+            })
             .select()
             .single();
         user = newUser;
+
+        // Enviar mensaje de bienvenida con el bono
+        try {
+            await bot.telegram.sendMessage(telegramId,
+                `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
+                `Has recibido <b>${bonusUSD} USD</b> (equivalente a ${BONUS_CUP_DEFAULT} CUP) como bono no retirable.\n` +
+                `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {}
     }
     return user;
-}
-
-async function getExchangeRate() {
-    const { data } = await supabase
-        .from('exchange_rate')
-        .select('rate')
-        .eq('id', 1)
-        .single();
-    return data?.rate || 110;
 }
 
 async function getMinDepositUSD() {
@@ -244,7 +263,6 @@ const regionKeyMap = {
     'Nueva York': 'newyork'
 };
 
-// ========== FUNCIÓN CORREGIDA ==========
 function getEndTimeFromSlot(lottery, timeSlot) {
     const lotteryKey = regionKeyMap[lottery];
     if (!lotteryKey) return null;
@@ -256,14 +274,11 @@ function getEndTimeFromSlot(lottery, timeSlot) {
     const now = moment.tz(TIMEZONE);
     const today = now.format('YYYY-MM-DD');
     
-    // Crear la hora de cierre para HOY a la hora específica del slot
     let hour = Math.floor(slot.end);
     let minute = (slot.end % 1) * 60;
     
-    // Crear el momento de cierre para hoy a esa hora
     const endTime = moment.tz(`${today} ${hour}:${minute}:00`, 'YYYY-MM-DD HH:mm:ss', TIMEZONE);
     
-    // Si la hora de cierre ya pasó hoy, devolver null (no se puede abrir)
     if (now.isSameOrAfter(endTime)) {
         return null;
     }
@@ -441,7 +456,7 @@ bot.command('start', async (ctx) => {
     }
 
     await safeEdit(ctx,
-        `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido a 4pu3$t4$_Qva, tu asistente de la suerte 🍀\n\n` +
+        `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido de nuevo a 4pu3$t4$_Qva, tu asistente de la suerte 🍀\n\n` +
         `Estamos encantados de tenerte aquí. ¿Listo para jugar y ganar? 🎲\n\n` +
         `Usa los botones del menú para explorar todas las opciones. Si tienes dudas, solo escríbenos.`,
         getMainKeyboard(ctx)
@@ -751,7 +766,6 @@ bot.action(/dep_(\d+)/, async (ctx) => {
 });
 
 bot.action('withdraw', async (ctx) => {
-    // Verificar horario de retiro
     if (!isWithdrawTime()) {
         const startStr = moment.tz(TIMEZONE).hours(22).minutes(0).format('h:mm A');
         const endStr = moment.tz(TIMEZONE).hours(23).minutes(30).format('h:mm A');
