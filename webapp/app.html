@@ -129,7 +129,6 @@
             font-size: 0.8rem;
             margin-left: 5px;
         }
-        /* Ajustes para el saldo en el header */
         .balance-container {
             display: flex;
             flex-direction: column;
@@ -144,12 +143,22 @@
             font-size: 0.7rem;
             color: #9ca3af;
         }
+        .withdraw-time-status {
+            font-size: 0.85rem;
+            padding: 6px 10px;
+            border-radius: 20px;
+            background: rgba(0,0,0,0.3);
+            display: inline-block;
+            margin-top: 5px;
+        }
+        .time-available { color: #10b981; }
+        .time-unavailable { color: #f87171; }
     </style>
 </head>
 <body class="p-4 md:p-6">
 
 <div id="app" class="max-w-4xl mx-auto relative">
-    <!-- Header con nuevo diseño de saldo -->
+    <!-- Header con nuevo diseño de saldo (CUP principal) -->
     <div class="flex items-center justify-between mb-6">
         <div class="flex items-center space-x-3">
             <div class="w-12 h-12 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 flex items-center justify-center shadow-lg">
@@ -253,20 +262,22 @@
                 </div>
             </div>
 
-            <!-- SECCIÓN MI DINERO (WALLET) -->
+            <!-- SECCIÓN MI DINERO (WALLET) - CUP como principal -->
             <div id="section-wallet" class="section hidden-section">
                 <div class="glass-card p-5">
                     <h3 class="text-2xl font-bold mb-4">💰 Mi saldo</h3>
                     <div class="grid grid-cols-2 gap-4 mb-6">
-                        <div class="bg-gradient-to-br from-yellow-500 to-yellow-700 p-4 rounded-2xl text-center shadow-xl">
-                            <p class="text-sm opacity-90">USD</p>
-                            <p id="walletUsd" class="text-3xl font-bold">0.00</p>
-                            <p id="walletUsdEquivalent" class="text-xs text-gray-200">(≈ 0.00 CUP)</p>
-                        </div>
+                        <!-- Primero CUP (ahora en verde) -->
                         <div class="bg-gradient-to-br from-green-500 to-green-700 p-4 rounded-2xl text-center shadow-xl">
                             <p class="text-sm opacity-90">CUP</p>
                             <p id="walletCup" class="text-3xl font-bold">0.00</p>
                             <p id="walletCupEquivalent" class="text-xs text-gray-200">(≈ 0.00 USD)</p>
+                        </div>
+                        <!-- Luego USD (en amarillo) -->
+                        <div class="bg-gradient-to-br from-yellow-500 to-yellow-700 p-4 rounded-2xl text-center shadow-xl">
+                            <p class="text-sm opacity-90">USD</p>
+                            <p id="walletUsd" class="text-3xl font-bold">0.00</p>
+                            <p id="walletUsdEquivalent" class="text-xs text-gray-200">(≈ 0.00 CUP)</p>
                         </div>
                         <div class="col-span-2 bg-blue-900/50 p-4 rounded-2xl text-center">
                             <p class="text-sm">🎁 Bono (no retirable)</p>
@@ -278,8 +289,12 @@
                         <button id="withdrawBtn" class="bg-pink-600 p-3 rounded-xl hover:bg-pink-700 transition"><i class="fas fa-arrow-up mr-1"></i> Retirar</button>
                         <button id="transferBtn" class="bg-gray-600 p-3 rounded-xl hover:bg-gray-700 transition"><i class="fas fa-exchange-alt mr-1"></i> Transferir</button>
                     </div>
-                    <div class="bg-gray-800/50 p-3 rounded-xl text-xs text-center text-gray-300 mb-2">
-                        <i class="fas fa-clock mr-1 text-pink-400"></i> Los retiros están disponibles de <strong>10:00 PM a 11:30 PM</strong> (hora Cuba).
+
+                    <!-- Indicador dinámico de horario de retiros -->
+                    <div id="withdrawTimeInfo" class="bg-gray-800/50 p-3 rounded-xl text-xs text-center text-gray-300 mb-2">
+                        <i class="fas fa-clock mr-1 text-pink-400"></i> 
+                        Los retiros están disponibles de <strong>10:00 PM a 11:30 PM</strong> (hora Cuba). 
+                        <span id="withdrawTimeStatus" class="withdraw-time-status"></span>
                     </div>
 
                     <div id="rechargeSection" class="hidden mt-6">
@@ -387,6 +402,10 @@
             ]
         };
 
+        // Horario de retiros (hora Cuba)
+        const WITHDRAW_START = 22;   // 10:00 PM
+        const WITHDRAW_END = 23.5;    // 11:30 PM (23.5)
+
         // Estado global
         let currentUser = null;
         let isAdmin = false;
@@ -417,6 +436,12 @@
         const betPreview = document.getElementById('betPreview');
         const submitBetBtn = document.getElementById('submitBetBtn');
 
+        // Referencias a elementos de retiro
+        const withdrawTimeStatus = document.getElementById('withdrawTimeStatus');
+        const withdrawSection = document.getElementById('withdrawSection');
+        const submitWithdrawBtn = document.getElementById('submitWithdrawBtn');
+
+        // Función para obtener la hora actual en Cuba
         function getCurrentCubaTime() {
             const now = new Date();
             const formatter = new Intl.DateTimeFormat('es-CU', { timeZone: 'America/Havana', hour: 'numeric', minute: 'numeric', hour12: false });
@@ -429,6 +454,59 @@
             return { hour, minute, totalHours: hour + minute/60 };
         }
 
+        // Verifica si está en horario de retiro
+        function isWithdrawTime() {
+            const now = getCurrentCubaTime();
+            return now.totalHours >= WITHDRAW_START && now.totalHours < WITHDRAW_END;
+        }
+
+        // Actualiza el indicador visual de horario de retiro
+        function updateWithdrawTimeStatus() {
+            if (!withdrawTimeStatus) return;
+            const available = isWithdrawTime();
+            if (available) {
+                withdrawTimeStatus.innerHTML = '✅ Disponible ahora';
+                withdrawTimeStatus.className = 'withdraw-time-status time-available';
+            } else {
+                withdrawTimeStatus.innerHTML = '❌ No disponible (horario: 10:00 PM - 11:30 PM)';
+                withdrawTimeStatus.className = 'withdraw-time-status time-unavailable';
+            }
+        }
+
+        // Llama a la actualización cada vez que se muestra la sección wallet
+        function onShowWallet() {
+            updateWithdrawTimeStatus();
+            // Ocultar sección de retiro si estaba abierta
+            if (withdrawSection) withdrawSection.classList.add('hidden');
+        }
+
+        // Interceptar showSection para actualizar wallet
+        const originalShowSection = showSection;
+        window.showSection = function(sectionId) {
+            originalShowSection(sectionId);
+            if (sectionId === 'wallet') {
+                onShowWallet();
+            }
+        };
+        // Reemplazar la función original
+        function showSection(sectionId) {
+            sections.forEach(s => {
+                s.classList.add('hidden-section');
+                s.classList.remove('active-section');
+            });
+            const active = document.getElementById(`section-${sectionId}`);
+            if (active) {
+                active.classList.remove('hidden-section');
+                active.classList.add('active-section');
+            }
+            if (sectionId === 'wallet') {
+                onShowWallet();
+            }
+        }
+        // Asignar a los botones
+        navBtns.forEach(btn => btn.addEventListener('click', (e) => showSection(e.currentTarget.dataset.section)));
+
+        // Verificar horario de loterías (ya existente)
         function checkLotterySchedule(lottery) {
             const slots = LOTTERY_SCHEDULES[lottery];
             if (!slots) return null;
@@ -574,19 +652,6 @@
             }
         });
 
-        function showSection(sectionId) {
-            sections.forEach(s => {
-                s.classList.add('hidden-section');
-                s.classList.remove('active-section');
-            });
-            const active = document.getElementById(`section-${sectionId}`);
-            if (active) {
-                active.classList.remove('hidden-section');
-                active.classList.add('active-section');
-            }
-        }
-        navBtns.forEach(btn => btn.addEventListener('click', (e) => showSection(e.currentTarget.dataset.section)));
-
         async function initAuth() {
             try {
                 const initData = TG.initData;
@@ -627,6 +692,9 @@
 
                 anime({ targets: '.glass-card', opacity: [0,1], translateY: [20,0], duration: 800 });
 
+                // Actualizar estado de retiro al inicio
+                updateWithdrawTimeStatus();
+
             } catch (e) {
                 console.error('Error en initAuth:', e);
                 iziToast.error({ title: 'Error de conexión', message: 'No se pudo cargar la sesión.' });
@@ -646,10 +714,10 @@
             document.getElementById('quickBalance').innerText = `${cup.toFixed(2)} CUP`;
             document.getElementById('quickBalanceUsd').innerText = `≈ ${cupToUsd} USD`;
             
-            document.getElementById('walletUsd').innerText = usd.toFixed(2);
-            document.getElementById('walletUsdEquivalent').innerText = `(≈ ${usdToCup} CUP)`;
             document.getElementById('walletCup').innerText = cup.toFixed(2);
             document.getElementById('walletCupEquivalent').innerText = `(≈ ${cupToUsd} USD)`;
+            document.getElementById('walletUsd').innerText = usd.toFixed(2);
+            document.getElementById('walletUsdEquivalent').innerText = `(≈ ${usdToCup} CUP)`;
             document.getElementById('walletBonus').innerText = `${bonus.toFixed(2)} USD`;
         }
 
@@ -737,7 +805,7 @@
             return { usd, cup };
         }
 
-        // ========== FUNCIONES DE ADMIN (igual que antes) ==========
+        // ========== FUNCIONES DE ADMIN ==========
         async function renderSessionsView() {
             const today = new Date().toISOString().split('T')[0];
             let sessions = [];
@@ -812,7 +880,7 @@
                 const pubRes = await fetch('/api/winning-numbers');
                 const published = await pubRes.json();
                 const publishedSet = new Set(published.map(p => `${p.lottery}|${p.date}|${p.time_slot}`));
-                let html = `<h4 class="text-xl font-semibold mb-4">🔢 Publicar números ganadores</h4><p class="mb-2 text-sm text-yellow-300">⚠️ 7 dígitos (centena+cuarteta).</p>`;
+                let html = `<h4 class="text-xl font-semibold mb-4">🔢 Publicar números ganadores</h4><p class="mb-2 text-sm text-yellow-300">⚠️ 7 dígitos (centena+cuarteta). Puedes separar con espacio: 123 4567</p>`;
                 if (sessions.length === 0) html += '<p class="text-gray-400">No hay sesiones cerradas.</p>';
                 else {
                     sessions.forEach(s => {
@@ -828,7 +896,7 @@
         }
 
         window.publishWinning = async (sessionId) => {
-            const number = prompt('Número ganador de 7 DÍGITOS (ej: 5173262):');
+            const number = prompt('Número ganador de 7 DÍGITOS (puedes separar con espacio, ej: 517 3262):');
             if (!number) return;
             const clean = number.replace(/\s+/g, '');
             if (!/^\d{7}$/.test(clean)) { iziToast.error({ message: 'Debe tener 7 dígitos' }); return; }
@@ -856,7 +924,10 @@
                 if (!data.winning_number) {
                     modalContent += `<p class="text-yellow-300">Aún no se ha publicado número ganador.</p>`;
                 } else {
-                    modalContent += `<p class="mb-3">🔢 Número ganador: <span class="font-mono bg-gray-900 px-2 py-1 rounded">${data.winning_number}</span></p>`;
+                    // Formatear número: primeros 3 dígitos, espacio, últimos 4
+                    const winningNumber = data.winning_number;
+                    const formattedNumber = winningNumber.length === 7 ? winningNumber.slice(0,3) + ' ' + winningNumber.slice(3) : winningNumber;
+                    modalContent += `<p class="mb-3">🔢 Número ganador: <span class="font-mono bg-gray-900 px-2 py-1 rounded">${formattedNumber}</span></p>`;
                     if (data.winners.length === 0) {
                         modalContent += `<p class="text-gray-400">No hubo ganadores en esta sesión.</p>`;
                     } else {
@@ -1190,22 +1261,43 @@
             });
         }
 
+        // ========== ADMIN: Mínimo de retiro en CUP (conversión a USD) ==========
         async function renderSetMinWithdrawView() {
-            const minWit = await fetch('/api/config/min-withdraw').then(r=>r.json()).then(d=>d.value).catch(()=>1);
-            adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">💰 Mínimo de retiro (USD)</h4><input type="number" id="minWithdraw" step="0.01" min="0" value="${minWit}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-rose-500 mb-3"><button id="saveMinWithdraw" class="w-full bg-rose-600 py-3 rounded-xl font-semibold hover:bg-rose-700">Guardar</button>`;
-            document.getElementById('saveMinWithdraw')?.addEventListener('click', async () => {
-                const val = parseFloat(document.getElementById('minWithdraw').value);
-                if (isNaN(val) || val < 0) { iziToast.warning({ message: 'Valor inválido' }); return; }
-                try {
-                    const res = await fetch('/api/admin/min-withdraw', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ value: val, userId: currentUser.telegram_id })
-                    });
-                    if (res.ok) iziToast.success({ message: 'Mínimo actualizado' });
-                    else iziToast.error({ message: 'Error' });
-                } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-            });
+            try {
+                const rateRes = await fetch('/api/exchange-rate');
+                const rateData = await rateRes.json();
+                const rate = rateData.rate;
+                const minWitUSD = await fetch('/api/config/min-withdraw').then(r=>r.json()).then(d=>d.value).catch(()=>1);
+                const minWitCUP = (minWitUSD * rate).toFixed(2);
+                adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">💰 Mínimo de retiro (CUP)</h4>
+                    <p class="text-sm text-gray-300 mb-2">Tasa actual: 1 USD = ${rate} CUP</p>
+                    <input type="number" id="minWithdrawCUP" step="0.01" min="0" value="${minWitCUP}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-rose-500 mb-3">
+                    <p class="text-sm text-gray-300 mb-3">Equivalente en USD: <span id="minWithdrawUSDEquivalent">${minWitUSD.toFixed(2)} USD</span></p>
+                    <button id="saveMinWithdraw" class="w-full bg-rose-600 py-3 rounded-xl font-semibold hover:bg-rose-700">Guardar</button>`;
+                
+                document.getElementById('minWithdrawCUP').addEventListener('input', function() {
+                    const cupVal = parseFloat(this.value) || 0;
+                    const usdEquiv = (cupVal / rate).toFixed(2);
+                    document.getElementById('minWithdrawUSDEquivalent').innerText = usdEquiv + ' USD';
+                });
+
+                document.getElementById('saveMinWithdraw')?.addEventListener('click', async () => {
+                    const cupVal = parseFloat(document.getElementById('minWithdrawCUP').value);
+                    if (isNaN(cupVal) || cupVal < 0) { iziToast.warning({ message: 'Valor inválido' }); return; }
+                    const usdVal = cupVal / rate;
+                    try {
+                        const res = await fetch('/api/admin/min-withdraw', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ value: usdVal, userId: currentUser.telegram_id })
+                        });
+                        if (res.ok) iziToast.success({ message: 'Mínimo actualizado' });
+                        else iziToast.error({ message: 'Error' });
+                    } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+                });
+            } catch (e) {
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar configuración.</p>';
+            }
         }
 
         async function renderViewDataView() {
@@ -1287,7 +1379,17 @@
             } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
         });
 
-        document.getElementById('submitWithdrawBtn').addEventListener('click', async () => {
+        // Modificar el evento de retiro para validar horario
+        submitWithdrawBtn.addEventListener('click', async () => {
+            // Verificar horario
+            if (!isWithdrawTime()) {
+                iziToast.error({ 
+                    title: 'Fuera de horario', 
+                    message: 'Los retiros solo están disponibles de 10:00 PM a 11:30 PM (hora Cuba).' 
+                });
+                return;
+            }
+
             const methodId = document.getElementById('withdrawMethodSelect').value;
             const account = document.getElementById('withdrawAccount').value.trim();
             const amount = parseFloat(currentUser.usd);
