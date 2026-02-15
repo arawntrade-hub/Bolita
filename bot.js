@@ -105,8 +105,8 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
-// ========== FUNCIÓN GETUSER MODIFICADA PARA AÑADIR BONO DE BIENVENIDA ==========
-async function getUser(telegramId, firstName = 'Jugador') {
+// ========== FUNCIÓN GETUSER MODIFICADA PARA AÑADIR BONO DE BIENVENIDA Y USERNAME ==========
+async function getUser(telegramId, firstName = 'Jugador', username = null) {
     let { data: user } = await supabase
         .from('users')
         .select('*')
@@ -123,6 +123,7 @@ async function getUser(telegramId, firstName = 'Jugador') {
             .insert({ 
                 telegram_id: telegramId, 
                 first_name: firstName,
+                username: username,
                 bonus_usd: bonusUSD 
             })
             .select()
@@ -138,6 +139,11 @@ async function getUser(telegramId, firstName = 'Jugador') {
                 { parse_mode: 'HTML' }
             );
         } catch (e) {}
+    } else {
+        // Actualizar username si cambió
+        if (username && user.username !== username) {
+            await supabase.from('users').update({ username }).eq('telegram_id', telegramId);
+        }
     }
     return user;
 }
@@ -433,7 +439,8 @@ bot.use(async (ctx, next) => {
     if (uid) {
         try {
             const firstName = ctx.from.first_name || 'Jugador';
-            ctx.dbUser = await getUser(uid, firstName);
+            const username = ctx.from.username || null;
+            ctx.dbUser = await getUser(uid, firstName, username);
         } catch (e) {
             console.error('Error cargando usuario:', e);
         }
@@ -836,12 +843,15 @@ bot.action(/wit_(\d+)/, async (ctx) => {
     );
 });
 
+// ========== TRANSFERENCIA CON USERNAME (MODIFICADO) ==========
 bot.action('transfer', async (ctx) => {
     ctx.session.awaitingTransferTarget = true;
     await safeEdit(ctx,
         '🔄 <b>Transferir saldo a otro usuario</b>\n\n' +
-        'Envía el <b>ID de Telegram</b> del usuario al que deseas transferir (ejemplo: 123456789).\n\n' +
-        'Puedes obtener el ID de Telegram de tu amigo si te lo proporciona o usando bots como @userinfobot.',
+        'Envía el <b>nombre de usuario</b> de Telegram (ej: @usuario) de la persona a la que deseas transferir.\n' +
+        'También puedes usar su ID numérico si lo conoces.\n\n' +
+        '⚠️ <b>Nota:</b> El bono no es transferible. Solo puedes transferir saldo USD real.\n\n' +
+        'Por favor, ingresa el usuario:',
         null
     );
 });
@@ -1438,6 +1448,12 @@ bot.action(/publish_win_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
+// ========== FUNCIÓN AUXILIAR PARA FORMATEAR NÚMERO GANADOR ==========
+function formatWinningNumber(num) {
+    if (!num || num.length !== 7) return num;
+    return num.slice(0, 3) + ' ' + num.slice(3);
+}
+
 async function processWinningNumber(sessionId, winningStr, ctx) {
     winningStr = winningStr.replace(/\s+/g, '');
     if (!/^\d{7}$/.test(winningStr)) {
@@ -1511,6 +1527,7 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         .eq('session_id', sessionId);
 
     const rate = await getExchangeRate();
+    const formattedWinning = formatWinningNumber(winningStr);
 
     for (const bet of bets || []) {
         const { data: userBefore } = await supabase
@@ -1572,22 +1589,22 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
             const cupEquivalentUsd = (premioTotalCUP / rate).toFixed(2);
             await bot.telegram.sendMessage(bet.user_id,
                 `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
-                `🔢 Número ganador: <code>${winningStr}</code>\n` +
+                `🔢 Número ganador: <code>${formattedWinning}</code>\n` +
                 `🎰 ${escapeHTML(session.lottery)} - ${escapeHTML(session.time_slot)}\n` +
-                `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n` +
-                (premioTotalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
+                `💰 Premio: ${premioTotalCUP.toFixed(2)} CUP / ${premioTotalUSD.toFixed(2)} USD\n` +
                 (premioTotalCUP > 0 ? `   (equivale a ${cupEquivalentUsd} USD aprox.)\n` : '') +
-                `\n📊 <b>Saldo anterior:</b> ${parseFloat(userBefore.usd).toFixed(2)} USD / ${parseFloat(userBefore.cup).toFixed(2)} CUP\n` +
-                `📊 <b>Saldo actual:</b> ${newUsd.toFixed(2)} USD / ${newCup.toFixed(2)} CUP\n\n` +
+                (premioTotalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
+                `\n📊 <b>Saldo anterior:</b> ${parseFloat(userBefore.cup).toFixed(2)} CUP / ${parseFloat(userBefore.usd).toFixed(2)} USD\n` +
+                `📊 <b>Saldo actual:</b> ${newCup.toFixed(2)} CUP / ${newUsd.toFixed(2)} USD\n\n` +
                 `✅ El premio ya fue acreditado a tu saldo. ¡Sigue disfrutando!`,
                 { parse_mode: 'HTML' }
             );
         } else {
             await bot.telegram.sendMessage(bet.user_id,
                 `🔢 <b>Números ganadores de ${escapeHTML(session.lottery)} (${session.date} - ${escapeHTML(session.time_slot)})</b>\n\n` +
-                `Número: <code>${winningStr}</code>\n\n` +
+                `Número: <code>${formattedWinning}</code>\n\n` +
                 `😔 Esta vez no has ganado, pero no te desanimes. ¡Sigue intentando y la suerte llegará!\n\n` +
-                `📊 <b>Tu saldo actual:</b> ${parseFloat(userBefore.usd).toFixed(2)} USD / ${parseFloat(userBefore.cup).toFixed(2)} CUP\n\n` +
+                `📊 <b>Tu saldo actual:</b> ${parseFloat(userBefore.cup).toFixed(2)} CUP / ${parseFloat(userBefore.usd).toFixed(2)} USD\n\n` +
                 `🍀 ¡Mucha suerte en la próxima!`,
                 { parse_mode: 'HTML' }
             );
@@ -1598,7 +1615,7 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
         `🎰 <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
         `📅 Fecha: ${session.date}\n` +
-        `🔢 Número: <code>${winningStr}</code>\n\n` +
+        `🔢 Número: <code>${formattedWinning}</code>\n\n` +
         `💬 Revisa tu historial para ver si has ganado. ¡Mucha suerte en las próximas jugadas!`
     );
 
@@ -2071,32 +2088,61 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // ========== TRANSFERENCIA CON USERNAME (NUEVO FLUJO) ==========
     if (session.awaitingTransferTarget) {
-        const targetId = parseInt(text);
-        if (isNaN(targetId)) {
-            await ctx.reply('❌ ID inválido. Debe ser un número entero. Por favor, inténtalo de nuevo.', getMainKeyboard(ctx));
-            return;
+        let targetIdentifier = text.trim();
+        // Quitar @ si lo tiene
+        if (targetIdentifier.startsWith('@')) {
+            targetIdentifier = targetIdentifier.slice(1);
         }
-        if (targetId === uid) {
-            await ctx.reply('❌ No puedes transferirte saldo a ti mismo. Elige otro usuario.', getMainKeyboard(ctx));
-            return;
+        // Buscar por username primero
+        let targetUser = null;
+        if (targetIdentifier) {
+            const { data: userByUsername } = await supabase
+                .from('users')
+                .select('telegram_id, username, first_name')
+                .eq('username', targetIdentifier)
+                .maybeSingle();
+            if (userByUsername) {
+                targetUser = userByUsername;
+            } else {
+                // Si no, intentar como ID numérico
+                const targetId = parseInt(targetIdentifier);
+                if (!isNaN(targetId)) {
+                    const { data: userById } = await supabase
+                        .from('users')
+                        .select('telegram_id, username, first_name')
+                        .eq('telegram_id', targetId)
+                        .maybeSingle();
+                    if (userById) {
+                        targetUser = userById;
+                    }
+                }
+            }
         }
-
-        const { data: targetUser } = await supabase
-            .from('users')
-            .select('telegram_id')
-            .eq('telegram_id', targetId)
-            .single();
 
         if (!targetUser) {
-            await ctx.reply('❌ El usuario destinatario no está registrado en el bot. Asegúrate de que el ID sea correcto.', getMainKeyboard(ctx));
+            await ctx.reply('❌ Usuario no encontrado. Asegúrate de que el nombre de usuario sea correcto o de que el ID numérico esté registrado.', getMainKeyboard(ctx));
+            delete session.awaitingTransferTarget;
+            return;
+        }
+        if (targetUser.telegram_id === uid) {
+            await ctx.reply('❌ No puedes transferirte saldo a ti mismo. Elige otro usuario.', getMainKeyboard(ctx));
+            delete session.awaitingTransferTarget;
             return;
         }
 
-        session.transferTarget = targetId;
+        session.transferTarget = targetUser.telegram_id;
         session.awaitingTransferAmount = true;
         delete session.awaitingTransferTarget;
-        await ctx.reply(`Ahora envía el <b>monto en USD</b> que deseas transferir:\n💰 Tu saldo disponible: ${parseFloat(user.usd).toFixed(2)} USD`, { parse_mode: 'HTML' });
+        const displayName = targetUser.first_name || targetUser.username || targetUser.telegram_id;
+        await ctx.reply(
+            `✅ Usuario encontrado: ${escapeHTML(displayName)}\n\n` +
+            `Ahora envía el <b>monto en USD</b> que deseas transferir.\n` +
+            `💰 Tu saldo disponible: ${parseFloat(user.usd).toFixed(2)} USD\n` +
+            `(Recuerda que el bono no es transferible)`,
+            { parse_mode: 'HTML' }
+        );
         return;
     }
 
@@ -2128,7 +2174,39 @@ bot.on(message('text'), async (ctx) => {
             .update({ usd: parseFloat(targetUser.usd) + amount, updated_at: new Date() })
             .eq('telegram_id', targetId);
 
-        await ctx.reply(`✅ Transferencia realizada con éxito: ${amount.toFixed(2)} USD a ${targetId}.`, { parse_mode: 'HTML' });
+        // Obtener nombres para el mensaje
+        const { data: fromUser } = await supabase
+            .from('users')
+            .select('first_name, username')
+            .eq('telegram_id', uid)
+            .single();
+        const fromName = fromUser?.first_name || fromUser?.username || uid;
+        const { data: toUser } = await supabase
+            .from('users')
+            .select('first_name, username')
+            .eq('telegram_id', targetId)
+            .single();
+        const toName = toUser?.first_name || toUser?.username || targetId;
+
+        await ctx.reply(
+            `✅ Transferencia realizada con éxito:\n` +
+            `💰 Monto: ${amount.toFixed(2)} USD\n` +
+            `👤 De: ${escapeHTML(fromName)}\n` +
+            `👤 A: ${escapeHTML(toName)}`,
+            { parse_mode: 'HTML' }
+        );
+
+        // Notificar al destinatario
+        try {
+            await bot.telegram.sendMessage(targetId,
+                `🔄 <b>Has recibido una transferencia</b>\n\n` +
+                `👤 De: ${escapeHTML(fromName)}\n` +
+                `💰 Monto: ${amount.toFixed(2)} USD\n` +
+                `📊 Saldo actualizado.`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {}
+
         delete session.transferTarget;
         delete session.awaitingTransferAmount;
         return;
@@ -2255,9 +2333,9 @@ bot.on(message('text'), async (ctx) => {
             `✅ <b>Jugada registrada exitosamente</b>\n` +
             `🎰 ${escapeHTML(lottery)} - ${escapeHTML(betType)}\n` +
             `📝 <code>${escapeHTML(text)}</code>\n` +
-            `💰 Costo total: ${totalUSD.toFixed(2)} USD / ${totalCUP.toFixed(2)} CUP\n` +
-            (totalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
+            `💰 Costo total: ${totalCUP.toFixed(2)} CUP / ${totalUSD.toFixed(2)} USD\n` +
             (totalCUP > 0 ? `   (equivale a ${cupEquivalentUsd} USD aprox.)\n` : '') +
+            (totalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
             `\n🍀 ¡Mucha suerte! Esperamos que seas el próximo ganador.`
         );
 
@@ -2371,8 +2449,8 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
             `✅ <b>Depósito aprobado</b>\n\n` +
             `💰 Monto depositado: ${request.amount}\n` +
             `💵 Se acreditaron:\n` +
-            `   USD: +${addUsd.toFixed(2)}\n` +
-            `   CUP: +${addCup.toFixed(2)}\n\n` +
+            `   CUP: +${addCup.toFixed(2)}\n` +
+            `   USD: +${addUsd.toFixed(2)}\n\n` +
             `¡Gracias por confiar en nosotros!`,
             { parse_mode: 'HTML' }
         );
@@ -2467,8 +2545,8 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
             `✅ <b>Retiro aprobado</b>\n\n` +
             `💰 Monto retirado: ${amountUsd} USD\n` +
             `💵 Se descontaron:\n` +
-            `   USD: -${amountUsd.toFixed(2)}\n` +
-            `   CUP: -${amountCup.toFixed(2)}\n\n` +
+            `   CUP: -${amountCup.toFixed(2)}\n` +
+            `   USD: -${amountUsd.toFixed(2)}\n\n` +
             `Los fondos serán enviados a la cuenta proporcionada en breve.`,
             { parse_mode: 'HTML' }
         );
