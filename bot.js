@@ -2528,7 +2528,7 @@ async function withdrawReminder() {
         await broadcastToAllUsers(
             `⏰ <b>Recordatorio de Retiros</b>\n\n` +
             `Los retiros estarán disponibles en 5 minutos, de 10:00 PM a 11:30 PM (hora Cuba).\n` +
-            `Asegúrate de tener saldo USD disponible y tus datos de cuenta listos.`,
+            `Asegúrate de tener saldo disponible y tus datos de cuenta listos.`,
             'HTML'
         );
     }
