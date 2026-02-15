@@ -129,21 +129,27 @@
             font-size: 0.8rem;
             margin-left: 5px;
         }
-        .balance-small {
-            font-size: 0.75rem;
-            line-height: 1rem;
-            color: #9ca3af;
+        /* Ajustes para el saldo en el header */
+        .balance-container {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            line-height: 1.2;
         }
         .balance-main {
-            font-size: 1rem;
+            font-size: 1.1rem;
             font-weight: 600;
+        }
+        .balance-secondary {
+            font-size: 0.7rem;
+            color: #9ca3af;
         }
     </style>
 </head>
 <body class="p-4 md:p-6">
 
 <div id="app" class="max-w-4xl mx-auto relative">
-    <!-- Header con nuevo nombre y saldo CUP principal -->
+    <!-- Header con nuevo diseño de saldo -->
     <div class="flex items-center justify-between mb-6">
         <div class="flex items-center space-x-3">
             <div class="w-12 h-12 rounded-full bg-gradient-to-r from-cyan-400 to-blue-500 flex items-center justify-center shadow-lg">
@@ -154,12 +160,9 @@
                 <p class="text-xs text-gray-300" id="userName">Cargando...</p>
             </div>
         </div>
-        <div class="glass-card px-4 py-2 flex items-center space-x-2">
-            <i class="fas fa-coins text-yellow-400"></i>
-            <div class="flex flex-col items-end">
-                <span id="quickBalance" class="balance-main text-white">0.00 CUP</span>
-                <span id="quickBalanceUsd" class="balance-small">≈ 0.00 USD</span>
-            </div>
+        <div class="glass-card px-3 py-2 balance-container">
+            <span class="balance-main" id="quickBalance">0.00 CUP</span>
+            <span class="balance-secondary" id="quickBalanceUsd">≈ 0.00 USD</span>
         </div>
     </div>
 
@@ -206,31 +209,26 @@
                 </div>
             </div>
 
-            <!-- SECCIÓN JUGAR (con validación de horarios y logos corregidos) -->
+            <!-- SECCIÓN JUGAR -->
             <div id="section-play" class="section hidden-section">
                 <div class="glass-card p-5">
                     <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-clock mr-3 text-cyan-300"></i>Elige lotería</h3>
                     <div class="grid grid-cols-3 gap-3 mb-4">
-                        <!-- Florida: Flamenco (🦩) -->
                         <button data-lottery="Florida" class="lottery-btn bg-gradient-to-br from-red-500 to-orange-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition flex flex-col items-center">
                             <span class="text-4xl mb-2 lottery-emoji">🦩</span>
                             <span class="block font-bold">Florida</span>
                         </button>
-                        <!-- Georgia: Melocotón (🍑) -->
                         <button data-lottery="Georgia" class="lottery-btn bg-gradient-to-br from-green-600 to-teal-500 p-4 rounded-2xl shadow-lg hover:scale-105 transition flex flex-col items-center">
                             <span class="text-4xl mb-2 lottery-emoji">🍑</span>
                             <span class="block font-bold">Georgia</span>
                         </button>
-                        <!-- Nueva York: Estatua de la Libertad (🗽) -->
                         <button data-lottery="Nueva York" class="lottery-btn bg-gradient-to-br from-blue-700 to-indigo-800 p-4 rounded-2xl shadow-lg hover:scale-105 transition flex flex-col items-center">
                             <span class="text-4xl mb-2 lottery-emoji">🗽</span>
                             <span class="block font-bold">Nueva York</span>
                         </button>
                     </div>
 
-                    <!-- Información de horarios -->
                     <div id="lotteryScheduleInfo" class="text-sm bg-gray-800/60 p-3 rounded-xl mb-3 hidden"></div>
-                    <!-- Estado de la sesión (turno abierto/cerrado) -->
                     <div id="sessionStatus" class="text-sm mb-3 hidden"></div>
 
                     <div id="betTypeContainer" class="hidden">
@@ -263,12 +261,12 @@
                         <div class="bg-gradient-to-br from-yellow-500 to-yellow-700 p-4 rounded-2xl text-center shadow-xl">
                             <p class="text-sm opacity-90">USD</p>
                             <p id="walletUsd" class="text-3xl font-bold">0.00</p>
-                            <p id="walletUsdEquivalent" class="text-xs text-gray-200">(0.00 CUP)</p>
+                            <p id="walletUsdEquivalent" class="text-xs text-gray-200">(≈ 0.00 CUP)</p>
                         </div>
                         <div class="bg-gradient-to-br from-green-500 to-green-700 p-4 rounded-2xl text-center shadow-xl">
                             <p class="text-sm opacity-90">CUP</p>
                             <p id="walletCup" class="text-3xl font-bold">0.00</p>
-                            <p id="walletCupEquivalent" class="text-xs text-gray-200">(0.00 USD)</p>
+                            <p id="walletCupEquivalent" class="text-xs text-gray-200">(≈ 0.00 USD)</p>
                         </div>
                         <div class="col-span-2 bg-blue-900/50 p-4 rounded-2xl text-center">
                             <p class="text-sm">🎁 Bono (no retirable)</p>
@@ -280,12 +278,10 @@
                         <button id="withdrawBtn" class="bg-pink-600 p-3 rounded-xl hover:bg-pink-700 transition"><i class="fas fa-arrow-up mr-1"></i> Retirar</button>
                         <button id="transferBtn" class="bg-gray-600 p-3 rounded-xl hover:bg-gray-700 transition"><i class="fas fa-exchange-alt mr-1"></i> Transferir</button>
                     </div>
-                    <!-- Información horario retiros -->
                     <div class="bg-gray-800/50 p-3 rounded-xl text-xs text-center text-gray-300 mb-2">
                         <i class="fas fa-clock mr-1 text-pink-400"></i> Los retiros están disponibles de <strong>10:00 PM a 11:30 PM</strong> (hora Cuba).
                     </div>
 
-                    <!-- Subsección Recargar -->
                     <div id="rechargeSection" class="hidden mt-6">
                         <h4 class="text-lg font-semibold mb-3">📥 Recargar saldo</h4>
                         <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-indigo-500 mb-3"><option>Selecciona método...</option></select>
@@ -294,7 +290,6 @@
                         <button id="submitDepositBtn" class="w-full bg-indigo-600 py-3 rounded-xl font-semibold hover:bg-indigo-700">Enviar solicitud</button>
                     </div>
 
-                    <!-- Subsección Retirar -->
                     <div id="withdrawSection" class="hidden mt-6">
                         <h4 class="text-lg font-semibold mb-3">📤 Retirar saldo</h4>
                         <select id="withdrawMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3"><option>Selecciona método...</option></select>
@@ -303,7 +298,6 @@
                         <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-3 rounded-xl font-semibold hover:bg-pink-700">Solicitar retiro</button>
                     </div>
 
-                    <!-- Subsección Transferir -->
                     <div id="transferSection" class="hidden mt-6">
                         <h4 class="text-lg font-semibold mb-3">🔄 Transferir saldo</h4>
                         <input type="number" id="transferTarget" placeholder="ID de Telegram destino" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-gray-500 mb-3">
@@ -379,17 +373,17 @@
         // ---------- CONFIGURACIÓN DE HORARIOS POR LOTERÍA (hora de Cuba) ----------
         const LOTTERY_SCHEDULES = {
             'Florida': [
-                { name: '🌅 Mañana', start: 9, end: 13 },    // 9am - 1pm
-                { name: '🌙 Noche', start: 14, end: 21 }     // 2pm - 9pm
+                { name: '🌅 Mañana', start: 9, end: 13 },
+                { name: '🌙 Noche', start: 14, end: 21 }
             ],
             'Georgia': [
-                { name: '🌅 Mañana', start: 9, end: 12 },    // 9am - 12pm
-                { name: '☀️ Tarde', start: 14, end: 18.5 },  // 2pm - 6:30pm
-                { name: '🌙 Noche', start: 20, end: 23 }     // 8pm - 11pm
+                { name: '🌅 Mañana', start: 9, end: 12 },
+                { name: '☀️ Tarde', start: 14, end: 18.5 },
+                { name: '🌙 Noche', start: 20, end: 23 }
             ],
             'Nueva York': [
-                { name: '🌅 Mañana', start: 9, end: 14 },    // 9am - 2pm
-                { name: '☀️ Tarde', start: 15, end: 22 }     // 3pm - 10pm
+                { name: '🌅 Mañana', start: 9, end: 14 },
+                { name: '☀️ Tarde', start: 15, end: 22 }
             ]
         };
 
@@ -404,7 +398,7 @@
         let activeSession = null;
         let selectedLottery = null;
         let selectedBetType = null;
-        let activeSlot = null; // nombre del turno activo actual
+        let activeSlot = null;
 
         // Elementos DOM
         const globalLoader = document.getElementById('globalLoader');
@@ -423,7 +417,6 @@
         const betPreview = document.getElementById('betPreview');
         const submitBetBtn = document.getElementById('submitBetBtn');
 
-        // ---------- Utilidad: obtener hora actual en Cuba (America/Havana) ----------
         function getCurrentCubaTime() {
             const now = new Date();
             const formatter = new Intl.DateTimeFormat('es-CU', { timeZone: 'America/Havana', hour: 'numeric', minute: 'numeric', hour12: false });
@@ -436,7 +429,6 @@
             return { hour, minute, totalHours: hour + minute/60 };
         }
 
-        // ---------- Mostrar horarios y validar slot activo ----------
         function checkLotterySchedule(lottery) {
             const slots = LOTTERY_SCHEDULES[lottery];
             if (!slots) return null;
@@ -469,7 +461,6 @@
             return active;
         }
 
-        // ---------- Al seleccionar lotería ----------
         document.querySelectorAll('.lottery-btn').forEach(btn => {
             btn.addEventListener('click', async () => {
                 selectedLottery = btn.dataset.lottery;
@@ -509,7 +500,6 @@
             });
         });
 
-        // ---------- Tipo de jugada ----------
         document.querySelectorAll('.type-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 if (!activeSession) {
@@ -537,7 +527,6 @@
             });
         });
 
-        // ---------- Vista previa de montos ----------
         betInput.addEventListener('input', function() {
             const lines = this.value.trim().split('\n').filter(l => l.trim() !== '');
             let totalUSD = 0, totalCUP = 0;
@@ -551,7 +540,6 @@
             betPreview.innerHTML = `💰 Total: ${totalUSD.toFixed(2)} USD / ${totalCUP.toFixed(2)} CUP<br>${totalUSD > 0 ? `(equivale a ${usdEquivalentCup} CUP)` : ''} ${totalCUP > 0 ? `(equivale a ${cupEquivalentUsd} USD)` : ''}`;
         });
 
-        // ---------- Envío de apuesta ----------
         submitBetBtn.addEventListener('click', async () => {
             if (!activeSession) { iziToast.error({ message: 'No hay sesión activa' }); return; }
             const rawText = betInput.value.trim();
@@ -586,7 +574,6 @@
             }
         });
 
-        // ---------- Navegación entre secciones ----------
         function showSection(sectionId) {
             sections.forEach(s => {
                 s.classList.add('hidden-section');
@@ -600,7 +587,6 @@
         }
         navBtns.forEach(btn => btn.addEventListener('click', (e) => showSection(e.currentTarget.dataset.section)));
 
-        // ---------- Autenticación inicial y carga de datos ----------
         async function initAuth() {
             try {
                 const initData = TG.initData;
@@ -649,7 +635,6 @@
             }
         }
 
-        // ---------- FUNCIÓN updateBalanceUI MODIFICADA ----------
         function updateBalanceUI() {
             if (!currentUser) return;
             const usd = parseFloat(currentUser.usd);
@@ -658,11 +643,9 @@
             const usdToCup = (usd * exchangeRate).toFixed(2);
             const cupToUsd = (cup / exchangeRate).toFixed(2);
             
-            // Header
             document.getElementById('quickBalance').innerText = `${cup.toFixed(2)} CUP`;
             document.getElementById('quickBalanceUsd').innerText = `≈ ${cupToUsd} USD`;
             
-            // Sección Mi dinero
             document.getElementById('walletUsd').innerText = usd.toFixed(2);
             document.getElementById('walletUsdEquivalent').innerText = `(≈ ${usdToCup} CUP)`;
             document.getElementById('walletCup').innerText = cup.toFixed(2);
@@ -754,7 +737,7 @@
             return { usd, cup };
         }
 
-        // ---------- Funciones de ADMIN ----------
+        // ========== FUNCIONES DE ADMIN (igual que antes) ==========
         async function renderSessionsView() {
             const today = new Date().toISOString().split('T')[0];
             let sessions = [];
@@ -1271,7 +1254,6 @@
             });
         });
 
-        // ---------- Manejadores de depósito, retiro, transferencia ----------
         document.getElementById('rechargeBtn').addEventListener('click', () => {
             document.getElementById('rechargeSection').classList.toggle('hidden');
         });
@@ -1319,7 +1301,7 @@
                 if (res.ok) {
                     iziToast.success({ message: 'Solicitud enviada' });
                     document.getElementById('withdrawSection').classList.add('hidden');
-                    currentUser.usd = 0; // actualización local rápida (luego se recargará)
+                    currentUser.usd = 0;
                     updateBalanceUI();
                 } else {
                     const err = await res.json();
@@ -1368,7 +1350,6 @@
             });
         }
 
-        // Inicializar
         initAuth();
 
         setTimeout(() => {
