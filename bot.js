@@ -457,7 +457,7 @@ bot.command('start', async (ctx) => {
     }
 
     await safeEdit(ctx,
-        `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido de nuevo a 4pu3$t4$_Qva, tu asistente de la suerte 🍀\n\n` +
+        `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido a 4pu3$t4$_Qva, tu asistente de la suerte 🍀\n\n` +
         `Estamos encantados de tenerte aquí. ¿Listo para jugar y ganar? 🎲\n\n` +
         `Usa los botones del menú para explorar todas las opciones. Si tienes dudas, solo escríbenos.`,
         getMainKeyboard(ctx)
@@ -471,13 +471,18 @@ bot.command('jugar', async (ctx) => {
 bot.command('mi_dinero', async (ctx) => {
     const user = ctx.dbUser;
     const rate = await getExchangeRate();
-    const usdToCup = (parseFloat(user.usd) * rate).toFixed(2);
-    const cupToUsd = (parseFloat(user.cup) / rate).toFixed(2);
+    const cup = parseFloat(user.cup);
+    const usd = parseFloat(user.usd);
+    const bonusUsd = parseFloat(user.bonus_usd);
+    const bonusCup = (bonusUsd * rate).toFixed(2);
+    const cupToUsd = (cup / rate).toFixed(2);
+    const usdToCup = (usd * rate).toFixed(2);
+
     const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-        `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
-        `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
-        `🎁 <b>Bono (no retirable, solo para jugar):</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD\n\n` +
-        `¿Qué deseas hacer con tu dinero?`;
+        `🇨🇺 <b>CUP:</b> ${cup.toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
+        `💵 <b>USD:</b> ${usd.toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
+        `🎁 <b>Bono (no retirable, solo para jugar):</b> ${bonusCup} CUP (≈ ${bonusUsd.toFixed(2)} USD)\n\n` +
+        `¿Qué deseas hacer?`;
     await safeEdit(ctx, text, myMoneyKbd());
 });
 
@@ -704,12 +709,17 @@ bot.action(/type_(.+)/, async (ctx) => {
 bot.action('my_money', async (ctx) => {
     const user = ctx.dbUser;
     const rate = await getExchangeRate();
-    const usdToCup = (parseFloat(user.usd) * rate).toFixed(2);
-    const cupToUsd = (parseFloat(user.cup) / rate).toFixed(2);
+    const cup = parseFloat(user.cup);
+    const usd = parseFloat(user.usd);
+    const bonusUsd = parseFloat(user.bonus_usd);
+    const bonusCup = (bonusUsd * rate).toFixed(2);
+    const cupToUsd = (cup / rate).toFixed(2);
+    const usdToCup = (usd * rate).toFixed(2);
+
     const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-        `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
-        `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
-        `🎁 <b>Bono (no retirable, solo para jugar):</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD\n\n` +
+        `🇨🇺 <b>CUP:</b> ${cup.toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
+        `💵 <b>USD:</b> ${usd.toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
+        `🎁 <b>Bono (no retirable, solo para jugar):</b> ${bonusCup} CUP (≈ ${bonusUsd.toFixed(2)} USD)\n\n` +
         `¿Qué te gustaría hacer?`;
     await safeEdit(ctx, text, myMoneyKbd());
 });
@@ -1611,12 +1621,17 @@ bot.on(message('text'), async (ctx) => {
         } else if (text === '💰 Mi dinero') {
             const user = ctx.dbUser;
             const rate = await getExchangeRate();
-            const usdToCup = (parseFloat(user.usd) * rate).toFixed(2);
-            const cupToUsd = (parseFloat(user.cup) / rate).toFixed(2);
+            const cup = parseFloat(user.cup);
+            const usd = parseFloat(user.usd);
+            const bonusUsd = parseFloat(user.bonus_usd);
+            const bonusCup = (bonusUsd * rate).toFixed(2);
+            const cupToUsd = (cup / rate).toFixed(2);
+            const usdToCup = (usd * rate).toFixed(2);
+
             const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-                `🇨🇺 <b>CUP:</b> ${parseFloat(user.cup).toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
-                `💵 <b>USD:</b> ${parseFloat(user.usd).toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
-                `🎁 <b>Bono (no retirable, solo para jugar):</b> ${parseFloat(user.bonus_usd).toFixed(2)} USD\n\n` +
+                `🇨🇺 <b>CUP:</b> ${cup.toFixed(2)} (aprox. ${cupToUsd} USD)\n` +
+                `💵 <b>USD:</b> ${usd.toFixed(2)} (aprox. ${usdToCup} CUP)\n` +
+                `🎁 <b>Bono (no retirable, solo para jugar):</b> ${bonusCup} CUP (≈ ${bonusUsd.toFixed(2)} USD)\n\n` +
                 `¿Qué deseas hacer?`;
             await safeEdit(ctx, text, myMoneyKbd());
             return;
