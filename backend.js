@@ -44,6 +44,13 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB
 });
 
+// ========== MAPA DE REGIONES ==========
+const regionKeyMap = {
+    'Florida': 'florida',
+    'Georgia': 'georgia',
+    'Nueva York': 'newyork'
+};
+
 // ========== FUNCIONES AUXILIARES ==========
 
 function isAdmin(userId) {
@@ -89,7 +96,6 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
-// Obtener configuración de mínimos de depósito/retiro
 async function getMinDepositUSD() {
     const { data } = await supabase
         .from('app_config')
@@ -108,7 +114,6 @@ async function getMinWithdrawUSD() {
     return data ? parseFloat(data.value) : 1.0;
 }
 
-// ========== PARSEO DE APUESTAS CON SOPORTE PARA D Y T ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return null;
@@ -177,8 +182,9 @@ function parseBetMessage(text, betType) {
     };
 }
 
-// Calcula la hora de cierre para un turno específico en una región
 function getEndTimeFromSlot(lottery, timeSlot) {
+    const lotteryKey = regionKeyMap[lottery];
+    if (!lotteryKey) return null;
     const schedules = {
         florida: {
             slots: [
@@ -200,9 +206,9 @@ function getEndTimeFromSlot(lottery, timeSlot) {
             ]
         }
     };
-    const region = schedules[lottery];
+    const region = schedules[lotteryKey];
     if (!region) return null;
-    const slot = region.slots.find(s => s.name.includes(timeSlot) || timeSlot.includes(s.name));
+    const slot = region.slots.find(s => s.name === timeSlot);
     if (!slot) return null;
     const now = moment.tz(TIMEZONE);
     let hour = Math.floor(slot.end);
@@ -214,7 +220,6 @@ function getEndTimeFromSlot(lottery, timeSlot) {
     return endTime.toDate();
 }
 
-// ========== FUNCIÓN DE BROADCAST GLOBAL ==========
 async function broadcastToAllUsers(message, parseMode = 'HTML') {
     const { data: users } = await supabase
         .from('users')
@@ -262,7 +267,7 @@ app.post('/api/auth', async (req, res) => {
 
     const botInfo = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`)
         .then(r => r.data.result)
-        .catch(() => ({ username: 'RifasCubaBot' }));
+        .catch(() => ({ username: '4pu3$t4$_QvaBot' }));
 
     res.json({
         user,
@@ -304,6 +309,18 @@ app.get('/api/exchange-rate', async (req, res) => {
     res.json({ rate });
 });
 
+// --- Mínimo depósito (público) ---
+app.get('/api/config/min-deposit', async (req, res) => {
+    const value = await getMinDepositUSD();
+    res.json({ value });
+});
+
+// --- Mínimo retiro (público) ---
+app.get('/api/config/min-withdraw', async (req, res) => {
+    const value = await getMinWithdrawUSD();
+    res.json({ value });
+});
+
 // --- Números ganadores (últimos 10) ---
 app.get('/api/winning-numbers', async (req, res) => {
     const { data } = await supabase
@@ -340,7 +357,6 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
     }
 
     const user = await getOrCreateUser(parseInt(userId));
-    // Obtener nombre del método
     const { data: method } = await supabase
         .from('deposit_methods')
         .select('name')
@@ -379,7 +395,6 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         return res.status(500).json({ error: 'Error al guardar solicitud' });
     }
 
-    // Notificar a todos los admins
     for (const adminId of ADMIN_IDS) {
         try {
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -523,7 +538,6 @@ app.post('/api/bets', async (req, res) => {
         return res.status(400).json({ error: 'Debes especificar un monto válido (USD o CUP)' });
     }
 
-    // Obtener mínimos para este tipo de jugada
     const { data: priceData } = await supabase
         .from('play_prices')
         .select('min_cup, min_usd')
@@ -722,10 +736,10 @@ app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
     res.json({ success: true, rate });
 });
 
-// --- Actualizar precios de una jugada (sin mínimos) ---
+// --- Actualizar precios de una jugada (con mínimos) ---
 app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     const { betType } = req.params;
-    const { amount_cup, amount_usd, payout_multiplier } = req.body;
+    const { amount_cup, amount_usd, payout_multiplier, min_cup, min_usd } = req.body;
     if (amount_cup === undefined || amount_usd === undefined || payout_multiplier === undefined) {
         return res.status(400).json({ error: 'Faltan campos (amount_cup, amount_usd, payout_multiplier)' });
     }
@@ -738,6 +752,8 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
         payout_multiplier,
         updated_at: new Date()
     };
+    if (min_cup !== undefined) updateData.min_cup = min_cup;
+    if (min_usd !== undefined) updateData.min_usd = min_usd;
 
     const { error } = await supabase
         .from('play_prices')
@@ -747,7 +763,7 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Actualizar mínimos de una jugada ---
+// --- Actualizar mínimos de una jugada (endpoint separado, pero ya se puede hacer en el mismo) ---
 app.put('/api/admin/play-prices/:betType/min', requireAdmin, async (req, res) => {
     const { betType } = req.params;
     const { min_cup, min_usd } = req.body;
@@ -816,8 +832,7 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     }
 
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-    const lotteryKey = lottery.toLowerCase().replace(' ', '');
-    const endTime = getEndTimeFromSlot(lotteryKey, time_slot);
+    const endTime = getEndTimeFromSlot(lottery, time_slot);
     if (!endTime) {
         return res.status(400).json({ error: `La hora de cierre para el turno ${time_slot} ya pasó hoy. No se puede abrir.` });
     }
@@ -1087,6 +1102,8 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         .select('*')
         .eq('session_id', sessionId);
 
+    const rate = await getExchangeRate();
+
     for (const bet of bets || []) {
         let premioTotalUSD = 0;
         let premioTotalCUP = 0;
@@ -1133,26 +1150,28 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
                 .eq('telegram_id', bet.user_id)
                 .single();
 
-            if (premioTotalUSD > 0) {
-                await supabase
-                    .from('users')
-                    .update({ usd: parseFloat(user.usd) + premioTotalUSD })
-                    .eq('telegram_id', bet.user_id);
-            }
-            if (premioTotalCUP > 0) {
-                await supabase
-                    .from('users')
-                    .update({ cup: parseFloat(user.cup) + premioTotalCUP })
-                    .eq('telegram_id', bet.user_id);
-            }
+            let newUsd = parseFloat(user.usd);
+            let newCup = parseFloat(user.cup);
+            if (premioTotalUSD > 0) newUsd += premioTotalUSD;
+            if (premioTotalCUP > 0) newCup += premioTotalCUP;
+
+            await supabase
+                .from('users')
+                .update({ usd: newUsd, cup: newCup })
+                .eq('telegram_id', bet.user_id);
+
+            const usdEquivalentCup = (premioTotalUSD * rate).toFixed(2);
+            const cupEquivalentUsd = (premioTotalCUP / rate).toFixed(2);
 
             try {
                 await bot.telegram.sendMessage(bet.user_id,
                     `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
                     `🔢 Número ganador: <code>${cleanNumber}</code>\n` +
                     `🎰 ${session.lottery} - ${session.time_slot}\n` +
-                    `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n\n` +
-                    `✅ El premio ya fue acreditado a tu saldo.`,
+                    `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n` +
+                    (premioTotalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
+                    (premioTotalCUP > 0 ? `   (equivale a ${cupEquivalentUsd} USD aprox.)\n` : '') +
+                    `\n✅ El premio ya fue acreditado a tu saldo.`,
                     { parse_mode: 'HTML' }
                 );
             } catch (e) {}
@@ -1199,7 +1218,7 @@ setInterval(async () => {
 
 // ========== INICIAR SERVIDOR Y BOT ==========
 app.listen(PORT, () => {
-    console.log(`🚀 Backend de Rifas Cuba corriendo en http://localhost:${PORT}`);
+    console.log(`🚀 Backend de 4pu3$t4$_Qva corriendo en http://localhost:${PORT}`);
     console.log(`📡 WebApp servida en ${WEBAPP_URL}`);
     console.log(`🤖 Iniciando bot de Telegram...`);
 });
