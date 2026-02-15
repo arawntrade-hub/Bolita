@@ -69,6 +69,16 @@ function verifyTelegramWebAppData(initData, botToken) {
     return computedHash === hash;
 }
 
+async function getExchangeRate() {
+    const { data } = await supabase
+        .from('exchange_rate')
+        .select('rate')
+        .eq('id', 1)
+        .single();
+    return data?.rate || 110;
+}
+
+// ========== FUNCIÓN GETORCREATEUSER MODIFICADA PARA AÑADIR BONO DE BIENVENIDA ==========
 async function getOrCreateUser(telegramId, firstName = 'Jugador') {
     let { data: user } = await supabase
         .from('users')
@@ -77,23 +87,31 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador') {
         .single();
 
     if (!user) {
+        const rate = await getExchangeRate();
+        const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
+
         const { data: newUser } = await supabase
             .from('users')
-            .insert({ telegram_id: telegramId, first_name: firstName })
+            .insert({ 
+                telegram_id: telegramId, 
+                first_name: firstName,
+                bonus_usd: bonusUSD 
+            })
             .select()
             .single();
         user = newUser;
+
+        // Enviar mensaje de bienvenida con el bono (opcional, pero lo hacemos desde el bot)
+        try {
+            await bot.telegram.sendMessage(telegramId,
+                `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
+                `Has recibido <b>${bonusUSD} USD</b> (equivalente a ${BONUS_CUP_DEFAULT} CUP) como bono no retirable.\n` +
+                `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {}
     }
     return user;
-}
-
-async function getExchangeRate() {
-    const { data } = await supabase
-        .from('exchange_rate')
-        .select('rate')
-        .eq('id', 1)
-        .single();
-    return data?.rate || 110;
 }
 
 async function getMinDepositUSD() {
