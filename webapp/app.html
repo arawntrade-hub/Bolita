@@ -146,10 +146,10 @@
             </div>
         </div>
         <div class="glass-card px-4 py-2 flex items-center space-x-2">
-            <i class="fas fa-coins text-yellow-400"></i>
-            <span id="quickBalance" class="font-semibold text-white">0.00 USD</span>
+    <i class="fas fa-coins text-yellow-400"></i>
+    <span id="quickBalance" class="font-semibold text-white">0.00 CUP</span>
+    <span id="quickBalanceUsd" class="text-xs text-gray-300">≈ 0.00 USD</span>
         </div>
-    </div>
 
     <!-- Loader principal -->
     <div id="globalLoader" class="flex justify-center items-center py-20">
@@ -639,19 +639,24 @@
 
         // Funciones auxiliares
         function updateBalanceUI() {
-            if (!currentUser) return;
-            const usd = parseFloat(currentUser.usd);
-            const cup = parseFloat(currentUser.cup);
-            const bonus = parseFloat(currentUser.bonus_usd);
-            const usdToCup = (usd * exchangeRate).toFixed(2);
-            const cupToUsd = (cup / exchangeRate).toFixed(2);
-            document.getElementById('quickBalance').innerText = `${usd.toFixed(2)} USD`;
-            document.getElementById('walletUsd').innerText = usd.toFixed(2);
-            document.getElementById('walletUsdEquivalent').innerText = `(≈ ${usdToCup} CUP)`;
-            document.getElementById('walletCup').innerText = cup.toFixed(2);
-            document.getElementById('walletCupEquivalent').innerText = `(≈ ${cupToUsd} USD)`;
-            document.getElementById('walletBonus').innerText = `${bonus.toFixed(2)} USD`;
-        }
+    if (!currentUser) return;
+    const usd = parseFloat(currentUser.usd);
+    const cup = parseFloat(currentUser.cup);
+    const bonus = parseFloat(currentUser.bonus_usd);
+    const usdToCup = (usd * exchangeRate).toFixed(2);
+    const cupToUsd = (cup / exchangeRate).toFixed(2);
+    
+    // Header
+    document.getElementById('quickBalance').innerText = `${cup.toFixed(2)} CUP`;
+    document.getElementById('quickBalanceUsd').innerText = `≈ ${cupToUsd} USD`;
+    
+    // Sección Mi dinero
+    document.getElementById('walletUsd').innerText = usd.toFixed(2);
+    document.getElementById('walletUsdEquivalent').innerText = `(≈ ${usdToCup} CUP)`;
+    document.getElementById('walletCup').innerText = cup.toFixed(2);
+    document.getElementById('walletCupEquivalent').innerText = `(≈ ${cupToUsd} USD)`;
+    document.getElementById('walletBonus').innerText = `${bonus.toFixed(2)} USD`;
+}
 
         async function loadDepositMethods() {
             try {
