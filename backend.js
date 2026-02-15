@@ -2,6 +2,7 @@
 // backend.js - API REST + Bot de Telegram (UNIFICADO)
 // Versión con soporte para múltiples admins, horarios por región,
 // configuración global de precios con mínimos, y validación en apuestas.
+// MODIFICADO: Soporte para username en usuarios y transferencias por username.
 // ==============================
 
 require('dotenv').config();
@@ -78,8 +79,8 @@ async function getExchangeRate() {
     return data?.rate || 110;
 }
 
-// ========== FUNCIÓN GETORCREATEUSER MODIFICADA PARA AÑADIR BONO DE BIENVENIDA ==========
-async function getOrCreateUser(telegramId, firstName = 'Jugador') {
+// ========== FUNCIÓN GETORCREATEUSER MODIFICADA PARA INCLUIR USERNAME ==========
+async function getOrCreateUser(telegramId, firstName = 'Jugador', username = null) {
     let { data: user } = await supabase
         .from('users')
         .select('*')
@@ -95,6 +96,7 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador') {
             .insert({ 
                 telegram_id: telegramId, 
                 first_name: firstName,
+                username: username,
                 bonus_usd: bonusUSD 
             })
             .select()
@@ -110,6 +112,14 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador') {
                 { parse_mode: 'HTML' }
             );
         } catch (e) {}
+    } else {
+        // Actualizar username si ha cambiado
+        if (username && user.username !== username) {
+            await supabase
+                .from('users')
+                .update({ username })
+                .eq('telegram_id', telegramId);
+        }
     }
     return user;
 }
@@ -280,7 +290,7 @@ app.post('/api/auth', async (req, res) => {
     if (!userStr) return res.status(400).json({ error: 'No hay datos de usuario' });
 
     const tgUser = JSON.parse(userStr);
-    const user = await getOrCreateUser(tgUser.id, tgUser.first_name);
+    const user = await getOrCreateUser(tgUser.id, tgUser.first_name, tgUser.username);
     const exchangeRate = await getExchangeRate();
 
     const botInfo = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`)
@@ -493,7 +503,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
     res.json({ success: true, requestId: request.id });
 });
 
-// --- Transferencia entre usuarios ---
+// --- Transferencia entre usuarios (MODIFICADO para soportar username) ---
 app.post('/api/transfer', async (req, res) => {
     const { from, to, amount } = req.body;
     if (!from || !to || !amount || amount <= 0) {
@@ -503,15 +513,52 @@ app.post('/api/transfer', async (req, res) => {
         return res.status(400).json({ error: 'No puedes transferirte a ti mismo' });
     }
 
+    // Obtener usuario origen
     const userFrom = await getOrCreateUser(parseInt(from));
-    const userTo = await getOrCreateUser(parseInt(to));
-    if (!userFrom || !userTo) {
-        return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (!userFrom) {
+        return res.status(404).json({ error: 'Usuario origen no encontrado' });
     }
+
+    // Buscar usuario destino: puede ser ID numérico o username (con o sin @)
+    let targetUserId = null;
+    let targetUser = null;
+
+    // Si 'to' es un número, buscar por ID
+    if (!isNaN(to) && typeof to === 'number' || !isNaN(parseInt(to))) {
+        targetUserId = parseInt(to);
+        const { data } = await supabase
+            .from('users')
+            .select('*')
+            .eq('telegram_id', targetUserId)
+            .single();
+        targetUser = data;
+    } else {
+        // Si es string, limpiar @ y buscar por username
+        let username = to.replace(/^@/, '');
+        const { data } = await supabase
+            .from('users')
+            .select('*')
+            .eq('username', username)
+            .maybeSingle();
+        if (data) {
+            targetUser = data;
+            targetUserId = data.telegram_id;
+        }
+    }
+
+    if (!targetUser) {
+        return res.status(404).json({ error: 'Usuario destino no encontrado (verifica el nombre de usuario o ID)' });
+    }
+
+    if (parseInt(from) === targetUserId) {
+        return res.status(400).json({ error: 'No puedes transferirte a ti mismo' });
+    }
+
     if (parseFloat(userFrom.usd) < amount) {
         return res.status(400).json({ error: 'Saldo insuficiente' });
     }
 
+    // Realizar transferencia
     await supabase
         .from('users')
         .update({ usd: parseFloat(userFrom.usd) - amount, updated_at: new Date() })
@@ -519,8 +566,8 @@ app.post('/api/transfer', async (req, res) => {
 
     await supabase
         .from('users')
-        .update({ usd: parseFloat(userTo.usd) + amount, updated_at: new Date() })
-        .eq('telegram_id', to);
+        .update({ usd: parseFloat(targetUser.usd) + amount, updated_at: new Date() })
+        .eq('telegram_id', targetUserId);
 
     res.json({ success: true });
 });
