@@ -427,7 +427,7 @@ function getAllowedHours(lotteryKey) {
             emoji: '🗽',
             slots: [
                 { name: '🌅 Mañana', start: 9, end: 14 },
-                { name: '☀️ Tarde',  start: 15, end: 22 }
+                { name: '🌙 Noche',  start: 15, end: 22 }
             ]
         }
     };
