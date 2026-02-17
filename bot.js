@@ -4,6 +4,7 @@
 // Mejoras: horario retiros, bono no retirable, mensajes más atentos
 // Funcionalidades: editar/eliminar métodos de pago, bono de bienvenida
 // CORRECCIÓN: Depósitos en CUP ahora validan mínimo correctamente y se acreditan ambas monedas
+// MODIFICADO: Notificaciones de retiro solo al abrir y cerrar (sin repeticiones)
 // ==============================
 
 require('dotenv').config();
@@ -843,7 +844,7 @@ bot.action(/wit_(\d+)/, async (ctx) => {
     );
 });
 
-// ========== TRANSFERENCIA CON USERNAME (MODIFICADO) ==========
+// ========== TRANSFERENCIA CON USERNAME ==========
 bot.action('transfer', async (ctx) => {
     ctx.session.awaitingTransferTarget = true;
     await safeEdit(ctx,
@@ -2663,35 +2664,36 @@ async function openScheduledSessions() {
     }
 }
 
-// Recordatorios de retiro
-async function withdrawReminder() {
+// ========== NUEVA FUNCIÓN: NOTIFICACIONES DE RETIRO SOLO AL ABRIR Y CERRAR ==========
+async function withdrawNotifications() {
     const now = moment.tz(TIMEZONE);
-    const currentHour = now.hour() + now.minute() / 60;
+    const currentHour = now.hour();
+    const currentMinute = now.minute();
 
-    // 5 minutos antes de abrir (21:55)
-    if (currentHour >= 21.9167 && currentHour < 22) {
+    // Apertura: 22:00 exacto
+    if (currentHour === 22 && currentMinute === 0) {
         await broadcastToAllUsers(
-            `⏰ <b>Recordatorio de Retiros</b>\n\n` +
-            `Los retiros estarán disponibles en 5 minutos, de 10:00 PM a 11:30 PM (hora Cuba).\n` +
-            `Asegúrate de tener saldo disponible y tus datos de cuenta listos.`,
+            `⏰ <b>Horario de Retiros ABIERTO</b>\n\n` +
+            `Ya puedes solicitar tus retiros de 10:00 PM a 11:30 PM (hora Cuba).\n` +
+            `Recuerda que el bono no es retirable y solo puedes retirar saldo USD.`,
             'HTML'
         );
     }
-    // 5 minutos antes de cerrar (23:25)
-    if (currentHour >= 23.4167 && currentHour < 23.5) {
+    // Cierre: 23:30 exacto
+    else if (currentHour === 23 && currentMinute === 30) {
         await broadcastToAllUsers(
-            `⏰ <b>Última llamada para Retiros</b>\n\n` +
-            `La ventana de retiros se cerrará en 5 minutos (11:30 PM hora Cuba).\n` +
-            `Si deseas retirar, hazlo ahora.`,
+            `⏰ <b>Horario de Retiros CERRADO</b>\n\n` +
+            `La ventana de retiros ha finalizado. Vuelve mañana de 10:00 PM a 11:30 PM (hora Cuba).`,
             'HTML'
         );
     }
 }
 
+// ========== CRON JOBS ==========
 cron.schedule('* * * * *', () => {
     closeExpiredSessions();
     openScheduledSessions();
-    withdrawReminder();
+    withdrawNotifications(); // Reemplaza a la antigua withdrawReminder
 }, { timezone: TIMEZONE });
 
 module.exports = bot;
