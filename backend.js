@@ -2,7 +2,8 @@
 // backend.js - API REST + Bot de Telegram (UNIFICADO)
 // Versión con soporte para múltiples admins, horarios por región,
 // configuración global de precios con mínimos, y validación en apuestas.
-// MODIFICADO: Soporte para username en usuarios y transferencias por username.
+// MODIFICADO: Soporte para username en usuarios, transferencias por username,
+// edición/cancelación de jugadas, y obtención de sesiones específicas.
 // ==============================
 
 require('dotenv').config();
@@ -142,50 +143,61 @@ async function getMinWithdrawUSD() {
     return data ? parseFloat(data.value) : 1.0;
 }
 
+// ========== FUNCIONES DE PARSEO DE APUESTAS (MÚLTIPLES NÚMEROS POR LÍNEA) ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
-    if (!line) return null;
+    if (!line) return [];
 
-    const match = line.match(/^([\dx]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/);
-    if (!match) return null;
+    // Formato: números separados por espacios o comas, luego "con" o "*", luego monto y moneda
+    // Ej: "10 02 78 90 87 con 10" o "10,02,78,90,87*10cup"
+    const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/i);
+    if (!match) return [];
 
-    let numero = match[1].trim();
+    let numerosStr = match[1].trim();
     const montoStr = match[2];
-    const moneda = match[3] || 'usd';
+    const moneda = (match[3] || 'usd').toLowerCase();
 
+    // Separar números por espacios o comas
+    const numeros = numerosStr.split(/[\s,]+/).filter(n => n.length > 0);
     const montoBase = parseFloat(montoStr);
-    if (isNaN(montoBase) || montoBase <= 0) return null;
+    if (isNaN(montoBase) || montoBase <= 0) return [];
 
-    let montoReal = montoBase;
-    let numeroGuardado = numero;
+    const resultados = [];
 
-    if (betType === 'fijo') {
-        if (/^\d{2}$/.test(numero)) {
-            // normal
-        } else if (/^[Dd](\d)$/.test(numero)) {
-            montoReal = montoBase * 10;
-            numeroGuardado = numero.toUpperCase();
-        } else if (/^[Tt](\d)$/.test(numero)) {
-            montoReal = montoBase * 10;
-            numeroGuardado = numero.toUpperCase();
+    for (let numero of numeros) {
+        let montoReal = montoBase;
+        let numeroGuardado = numero;
+
+        if (betType === 'fijo') {
+            if (/^\d{2}$/.test(numero)) {
+                // normal
+            } else if (/^[Dd](\d)$/.test(numero)) {
+                montoReal = montoBase * 10;
+                numeroGuardado = numero.toUpperCase();
+            } else if (/^[Tt](\d)$/.test(numero)) {
+                montoReal = montoBase * 10;
+                numeroGuardado = numero.toUpperCase();
+            } else {
+                continue;
+            }
+        } else if (betType === 'corridos') {
+            if (!/^\d{2}$/.test(numero)) continue;
+        } else if (betType === 'centena') {
+            if (!/^\d{3}$/.test(numero)) continue;
+        } else if (betType === 'parle') {
+            if (!/^\d{2}x\d{2}$/.test(numero)) continue;
         } else {
-            return null;
+            continue;
         }
-    } else if (betType === 'corridos') {
-        if (!/^\d{2}$/.test(numero)) return null;
-    } else if (betType === 'centena') {
-        if (!/^\d{3}$/.test(numero)) return null;
-    } else if (betType === 'parle') {
-        if (!/^\d{2}x\d{2}$/.test(numero)) return null;
-    } else {
-        return null;
+
+        resultados.push({
+            numero: numeroGuardado,
+            usd: moneda === 'usd' ? montoReal : 0,
+            cup: moneda === 'cup' ? montoReal : 0
+        });
     }
 
-    return {
-        numero: numeroGuardado,
-        usd: moneda === 'usd' ? montoReal : 0,
-        cup: moneda === 'cup' ? montoReal : 0
-    };
+    return resultados;
 }
 
 function parseBetMessage(text, betType) {
@@ -194,11 +206,11 @@ function parseBetMessage(text, betType) {
     let totalUSD = 0, totalCUP = 0;
 
     for (const line of lines) {
-        const parsed = parseBetLine(line, betType);
-        if (parsed) {
-            items.push(parsed);
-            totalUSD += parsed.usd;
-            totalCUP += parsed.cup;
+        const parsedItems = parseBetLine(line, betType);
+        for (const item of parsedItems) {
+            items.push(item);
+            totalUSD += item.usd;
+            totalCUP += item.cup;
         }
     }
 
@@ -301,7 +313,8 @@ app.post('/api/auth', async (req, res) => {
         user,
         isAdmin: isAdmin(tgUser.id),
         exchangeRate,
-        botUsername: botInfo.username
+        botUsername: botInfo.username,
+        bonusCupDefault: BONUS_CUP_DEFAULT  // Enviar al frontend para mostrarlo
     });
 });
 
@@ -373,6 +386,17 @@ app.get('/api/lottery-sessions/active', async (req, res) => {
         .eq('time_slot', time_slot)
         .eq('status', 'open')
         .maybeSingle();
+    res.json(data);
+});
+
+// --- Obtener sesión por ID (para verificar si está abierta) ---
+app.get('/api/lottery-sessions/:id', async (req, res) => {
+    const { id } = req.params;
+    const { data } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('id', id)
+        .single();
     res.json(data);
 });
 
@@ -503,7 +527,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
     res.json({ success: true, requestId: request.id });
 });
 
-// --- Transferencia entre usuarios (MODIFICADO para soportar username) ---
+// --- Transferencia entre usuarios (soporta username) ---
 app.post('/api/transfer', async (req, res) => {
     const { from, to, amount } = req.body;
     if (!from || !to || !amount || amount <= 0) {
@@ -677,10 +701,65 @@ app.post('/api/bets', async (req, res) => {
     res.json({ success: true, bet, updatedUser });
 });
 
+// --- Cancelar una jugada (reembolso) ---
+app.post('/api/bets/:id/cancel', async (req, res) => {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+        return res.status(400).json({ error: 'Falta userId' });
+    }
+
+    // Obtener la jugada
+    const { data: bet } = await supabase
+        .from('bets')
+        .select('*')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+
+    if (!bet) {
+        return res.status(404).json({ error: 'Jugada no encontrada' });
+    }
+
+    // Verificar que la sesión aún esté abierta (si tiene sesión asociada)
+    if (bet.session_id) {
+        const { data: session } = await supabase
+            .from('lottery_sessions')
+            .select('status')
+            .eq('id', bet.session_id)
+            .single();
+
+        if (!session || session.status !== 'open') {
+            return res.status(400).json({ error: 'No se puede cancelar: la sesión ya está cerrada' });
+        }
+    }
+
+    // Reembolsar saldo
+    const user = await getOrCreateUser(parseInt(userId));
+    const newUsd = parseFloat(user.usd) + parseFloat(bet.cost_usd);
+    const newCup = parseFloat(user.cup) + parseFloat(bet.cost_cup);
+    // Nota: el bono no se reembolsa porque se descontó primero
+
+    await supabase
+        .from('users')
+        .update({ usd: newUsd, cup: newCup, updated_at: new Date() })
+        .eq('telegram_id', userId);
+
+    // Eliminar la jugada (o marcarla como cancelada)
+    await supabase
+        .from('bets')
+        .delete()
+        .eq('id', id);
+
+    const updatedUser = await getOrCreateUser(parseInt(userId));
+    res.json({ success: true, updatedUser });
+});
+
 // --- Historial de apuestas del usuario ---
 app.get('/api/user/:userId/bets', async (req, res) => {
     const { userId } = req.params;
-    const limit = parseInt(req.query.limit) || 5;
+    const limit = parseInt(req.query.limit) || 20;
     const { data } = await supabase
         .from('bets')
         .select('*')
@@ -700,7 +779,7 @@ app.get('/api/user/:userId/referrals/count', async (req, res) => {
     res.json({ count: count || 0 });
 });
 
-// ========== ENDPOINTS DE ADMIN ==========
+// ========== ENDPOINTS DE ADMIN (sin cambios, pero incluidos por completitud) ==========
 
 // --- Añadir método de depósito ---
 app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
@@ -828,7 +907,7 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Actualizar mínimos de una jugada (endpoint separado, pero ya se puede hacer en el mismo) ---
+// --- Actualizar mínimos de una jugada (endpoint separado) ---
 app.put('/api/admin/play-prices/:betType/min', requireAdmin, async (req, res) => {
     const { betType } = req.params;
     const { min_cup, min_usd } = req.body;
