@@ -153,6 +153,36 @@
         }
         .time-available { color: #10b981; }
         .time-unavailable { color: #f87171; }
+        .method-info {
+            font-size: 0.9rem;
+            background: rgba(0,0,0,0.3);
+            padding: 8px;
+            border-radius: 12px;
+            margin-top: 5px;
+        }
+        .method-info p {
+            margin: 3px 0;
+        }
+        .bet-item {
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .bet-item:hover {
+            background: rgba(255,255,255,0.1);
+            transform: scale(1.01);
+        }
+        .bet-detail-item {
+            background: rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 8px;
+            margin-bottom: 5px;
+        }
+        .edit-cancel-btn {
+            transition: all 0.2s;
+        }
+        .edit-cancel-btn:hover {
+            transform: scale(1.02);
+        }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -195,7 +225,7 @@
 
         <!-- Contenedor de secciones -->
         <div id="sectionsContainer" class="mt-4 mb-24">
-            <!-- SECCIÓN HOME -->
+            <!-- SECCIÓN HOME (con bono dinámico) -->
             <div id="section-home" class="section active-section">
                 <div class="glass-card p-6 text-center">
                     <div class="w-24 h-24 mx-auto bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center mb-4 shadow-2xl animate-pulse-slow">
@@ -207,7 +237,7 @@
                         <div class="bg-white/20 p-4 rounded-2xl backdrop-blur-sm">
                             <i class="fas fa-trophy text-3xl text-yellow-300 mb-2"></i>
                             <p class="font-bold">Bono de bienvenida</p>
-                            <p class="text-sm text-gray-300">70 CUP en USD</p>
+                            <p class="text-sm text-gray-300" id="welcomeBonus">70 CUP en USD</p>
                         </div>
                         <div class="bg-white/20 p-4 rounded-2xl backdrop-blur-sm">
                             <i class="fas fa-percent text-3xl text-green-300 mb-2"></i>
@@ -299,7 +329,11 @@
 
                     <div id="rechargeSection" class="hidden mt-6">
                         <h4 class="text-lg font-semibold mb-3">📥 Recargar saldo</h4>
-                        <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-indigo-500 mb-3"><option>Selecciona método...</option></select>
+                        <select id="depositMethodSelect" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-indigo-500 mb-3">
+                            <option value="">Selecciona método...</option>
+                        </select>
+                        <!-- Información del método seleccionado -->
+                        <div id="depositMethodInfo" class="method-info hidden"></div>
                         <input type="file" id="depositScreenshot" accept="image/*" class="file-input mb-3">
                         <input type="text" id="depositAmount" placeholder="Monto (ej: 500 cup o 10 usd)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-indigo-500 mb-3">
                         <button id="submitDepositBtn" class="w-full bg-indigo-600 py-3 rounded-xl font-semibold hover:bg-indigo-700">Enviar solicitud</button>
@@ -313,7 +347,7 @@
                         <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-3 rounded-xl font-semibold hover:bg-pink-700">Solicitar retiro</button>
                     </div>
 
-                    <!-- SECCIÓN TRANSFERIR ACTUALIZADA (con username y monto en CUP) -->
+                    <!-- SECCIÓN TRANSFERIR ACTUALIZADA (con username) -->
                     <div id="transferSection" class="hidden mt-6">
                         <h4 class="text-lg font-semibold mb-3">🔄 Transferir saldo</h4>
                         <p class="text-xs text-gray-400 mb-2">⚠️ El bono no es transferible. Solo puedes transferir saldo CUP (se convertirá automáticamente a USD).</p>
@@ -327,11 +361,11 @@
                 </div>
             </div>
 
-            <!-- SECCIÓN MIS JUGADAS -->
+            <!-- SECCIÓN MIS JUGADAS (con soporte para ver detalle, editar y cancelar) -->
             <div id="section-bets" class="section hidden-section">
                 <div class="glass-card p-5">
                     <h3 class="text-2xl font-bold mb-4">📋 Historial de apuestas</h3>
-                    <div id="betsList" class="space-y-3"><p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p></div>
+                    <div id="betsList" class="space-y-3"></div>
                 </div>
             </div>
 
@@ -381,8 +415,17 @@
     </div>
 </div>
 
-<!-- MODAL -->
-<div id="adminModal" class="modal hidden" onclick="if(event.target===this) this.classList.add('hidden')"><div class="modal-content" id="modalBody"></div></div>
+<!-- MODAL para detalle de jugada -->
+<div id="betDetailModal" class="modal hidden" onclick="if(event.target===this) this.classList.add('hidden')">
+    <div class="modal-content" id="betDetailModalBody">
+        <!-- Contenido dinámico -->
+    </div>
+</div>
+
+<!-- MODAL para admin (genérico) -->
+<div id="adminModal" class="modal hidden" onclick="if(event.target===this) this.classList.add('hidden')">
+    <div class="modal-content" id="modalBody"></div>
+</div>
 
 <script>
     (function() {
@@ -415,6 +458,7 @@
         let currentUser = null;
         let isAdmin = false;
         let exchangeRate = 110;
+        let bonusCupDefault = 70;      // Valor por defecto, se actualizará desde backend
         let botUsername = '4pu3$t4$_QvaBot';
         let depositMethods = [];
         let withdrawMethods = [];
@@ -423,6 +467,7 @@
         let selectedLottery = null;
         let selectedBetType = null;
         let activeSlot = null;
+        let userBets = [];              // Cache de apuestas del usuario
 
         // Elementos DOM
         const globalLoader = document.getElementById('globalLoader');
@@ -433,6 +478,8 @@
         const adminViewContainer = document.getElementById('adminViewContainer');
         const adminModal = document.getElementById('adminModal');
         const modalBody = document.getElementById('modalBody');
+        const betDetailModal = document.getElementById('betDetailModal');
+        const betDetailModalBody = document.getElementById('betDetailModalBody');
         const lotteryScheduleInfo = document.getElementById('lotteryScheduleInfo');
         const sessionStatus = document.getElementById('sessionStatus');
         const betTypeContainer = document.getElementById('betTypeContainer');
@@ -440,6 +487,7 @@
         const betInput = document.getElementById('betInput');
         const betPreview = document.getElementById('betPreview');
         const submitBetBtn = document.getElementById('submitBetBtn');
+        const welcomeBonus = document.getElementById('welcomeBonus');
 
         // Referencias a elementos de retiro
         const withdrawTimeStatus = document.getElementById('withdrawTimeStatus');
@@ -485,15 +533,7 @@
             if (withdrawSection) withdrawSection.classList.add('hidden');
         }
 
-        // Interceptar showSection para actualizar wallet
-        const originalShowSection = showSection;
-        window.showSection = function(sectionId) {
-            originalShowSection(sectionId);
-            if (sectionId === 'wallet') {
-                onShowWallet();
-            }
-        };
-        // Reemplazar la función original
+        // Función showSection
         function showSection(sectionId) {
             sections.forEach(s => {
                 s.classList.add('hidden-section');
@@ -511,7 +551,7 @@
         // Asignar a los botones
         navBtns.forEach(btn => btn.addEventListener('click', (e) => showSection(e.currentTarget.dataset.section)));
 
-        // Verificar horario de loterías (ya existente)
+        // Verificar horario de loterías
         function checkLotterySchedule(lottery) {
             const slots = LOTTERY_SCHEDULES[lottery];
             if (!slots) return null;
@@ -594,39 +634,124 @@
                 let instructions = '';
                 switch (selectedBetType) {
                     case 'fijo':
-                        instructions = `🎯 <b>FIJO</b> – Número de 2 dígitos. Usa "D" para decena o "T" para terminal.<br>Ej: 12 con 1 usd, D2 con 5 usd, T5*1cup`;
+                        instructions = `🎯 <b>FIJO</b> – Número de 2 dígitos. Usa "D" para decena o "T" para terminal.<br>Ej: 12 con 1 usd, D2 con 5 usd, T5*1cup<br>También varios números por línea: 10 02 78 90 87 con 10 cup`;
                         break;
                     case 'corridos':
-                        instructions = `🏃 <b>CORRIDOS</b> – Número de 2 dígitos. Ej: 17 con 0.5 usd, 32 con 10 cup`;
+                        instructions = `🏃 <b>CORRIDOS</b> – Número de 2 dígitos. Ej: 17 con 0.5 usd, 32 con 10 cup<br>Varios: 17 32 45 con 5 cup`;
                         break;
                     case 'centena':
-                        instructions = `💯 <b>CENTENA</b> – Número de 3 dígitos. Ej: 517 con 2 usd, 019*1 usd`;
+                        instructions = `💯 <b>CENTENA</b> – Número de 3 dígitos. Ej: 517 con 2 usd, 019*1 usd<br>Varios: 517 019 123 con 2 usd`;
                         break;
                     case 'parle':
-                        instructions = `🔒 <b>PARLE</b> – Dos números de 2 dígitos separados por "x". Ej: 17x32 con 1 usd, 17x62*2 usd`;
+                        instructions = `🔒 <b>PARLE</b> – Dos números de 2 dígitos separados por "x". Ej: 17x32 con 1 usd, 17x62*2 usd<br>Varios: 17x32 17x62 32x62 con 5 cup`;
                         break;
                 }
                 document.getElementById('betInstructions').innerHTML = instructions;
             });
         });
 
-        betInput.addEventListener('input', function() {
-            const lines = this.value.trim().split('\n').filter(l => l.trim() !== '');
+        // Parseo mejorado para múltiples números por línea
+        function parseBetLine(line, betType) {
+            line = line.trim().toLowerCase();
+            if (!line) return [];
+
+            const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/i);
+            if (!match) return [];
+
+            let numerosStr = match[1].trim();
+            const montoStr = match[2];
+            const moneda = (match[3] || 'usd').toLowerCase();
+
+            const numeros = numerosStr.split(/[\s,]+/).filter(n => n.length > 0);
+            const montoBase = parseFloat(montoStr);
+            if (isNaN(montoBase) || montoBase <= 0) return [];
+
+            const resultados = [];
+
+            for (let numero of numeros) {
+                let montoReal = montoBase;
+                let numeroGuardado = numero;
+
+                if (betType === 'fijo') {
+                    if (/^\d{2}$/.test(numero)) {
+                        // normal
+                    } else if (/^[Dd](\d)$/.test(numero)) {
+                        montoReal = montoBase * 10;
+                        numeroGuardado = numero.toUpperCase();
+                    } else if (/^[Tt](\d)$/.test(numero)) {
+                        montoReal = montoBase * 10;
+                        numeroGuardado = numero.toUpperCase();
+                    } else {
+                        continue;
+                    }
+                } else if (betType === 'corridos') {
+                    if (!/^\d{2}$/.test(numero)) continue;
+                } else if (betType === 'centena') {
+                    if (!/^\d{3}$/.test(numero)) continue;
+                } else if (betType === 'parle') {
+                    if (!/^\d{2}x\d{2}$/.test(numero)) continue;
+                } else {
+                    continue;
+                }
+
+                resultados.push({
+                    numero: numeroGuardado,
+                    usd: moneda === 'usd' ? montoReal : 0,
+                    cup: moneda === 'cup' ? montoReal : 0
+                });
+            }
+
+            return resultados;
+        }
+
+        function parseBetMessage(text, betType) {
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+            const items = [];
             let totalUSD = 0, totalCUP = 0;
-            lines.forEach(line => {
-                const { usd, cup } = parseAmountFromLine(line);
-                totalUSD += usd;
-                totalCUP += cup;
-            });
-            const usdEquivalentCup = (totalUSD * exchangeRate).toFixed(2);
-            const cupEquivalentUsd = (totalCUP / exchangeRate).toFixed(2);
-            betPreview.innerHTML = `💰 Total: ${totalCUP.toFixed(2)} CUP / ${totalUSD.toFixed(2)} USD<br>${totalCUP > 0 ? `(equivale a ${cupEquivalentUsd} USD)` : ''} ${totalUSD > 0 ? `(equivale a ${usdEquivalentCup} CUP)` : ''}`;
+
+            for (const line of lines) {
+                const parsedItems = parseBetLine(line, betType);
+                for (const item of parsedItems) {
+                    items.push(item);
+                    totalUSD += item.usd;
+                    totalCUP += item.cup;
+                }
+            }
+
+            return {
+                items,
+                totalUSD,
+                totalCUP,
+                ok: items.length > 0
+            };
+        }
+
+        betInput.addEventListener('input', function() {
+            if (!selectedBetType) return;
+            const rawText = this.value;
+            const parsed = parseBetMessage(rawText, selectedBetType);
+            if (parsed.ok) {
+                const totalCUP = parsed.totalCUP;
+                const totalUSD = parsed.totalUSD;
+                const cupEquivalentUsd = (totalCUP / exchangeRate).toFixed(2);
+                const usdEquivalentCup = (totalUSD * exchangeRate).toFixed(2);
+                betPreview.innerHTML = `💰 Total: ${totalCUP.toFixed(2)} CUP / ${totalUSD.toFixed(2)} USD<br>${totalCUP > 0 ? `(equivale a ${cupEquivalentUsd} USD)` : ''} ${totalUSD > 0 ? `(equivale a ${usdEquivalentCup} CUP)` : ''}`;
+            } else {
+                betPreview.innerHTML = '❌ Formato no válido';
+            }
         });
 
         submitBetBtn.addEventListener('click', async () => {
             if (!activeSession) { iziToast.error({ message: 'No hay sesión activa' }); return; }
             const rawText = betInput.value.trim();
             if (!rawText || !selectedBetType) { iziToast.warning({ message: 'Escribe tus jugadas' }); return; }
+            
+            const parsed = parseBetMessage(rawText, selectedBetType);
+            if (!parsed.ok) {
+                iziToast.warning({ message: 'Formato de jugada inválido' });
+                return;
+            }
+
             try {
                 const res = await fetch('/api/bets', {
                     method: 'POST',
@@ -644,7 +769,7 @@
                     iziToast.success({ title: '✅ Jugada registrada', message: '¡Buena suerte!' });
                     currentUser = data.updatedUser;
                     updateBalanceUI();
-                    loadBets();
+                    loadBets(); // Recargar historial
                     betInput.value = '';
                     betPreview.innerHTML = '';
                     showSection('home');
@@ -675,6 +800,11 @@
                 isAdmin = data.isAdmin;
                 exchangeRate = data.exchangeRate || 110;
                 botUsername = data.botUsername || '4pu3$t4$_QvaBot';
+                bonusCupDefault = data.bonusCupDefault || 70;
+                
+                if (welcomeBonus) {
+                    welcomeBonus.innerText = `${bonusCupDefault} CUP en USD`;
+                }
 
                 document.getElementById('userName').innerText = currentUser.first_name || 'Jugador';
                 updateBalanceUI();
@@ -740,6 +870,27 @@
                         select.appendChild(option);
                     });
                 }
+                
+                // Mostrar información del método seleccionado
+                select.addEventListener('change', function() {
+                    const methodId = this.value;
+                    const methodInfo = document.getElementById('depositMethodInfo');
+                    if (methodId) {
+                        const method = depositMethods.find(m => m.id == methodId);
+                        if (method) {
+                            methodInfo.innerHTML = `
+                                <p><strong>${escapeHTML(method.name)}</strong></p>
+                                <p>📱 Número: <code>${escapeHTML(method.card)}</code></p>
+                                <p>✅ Confirmar: <code>${escapeHTML(method.confirm)}</code></p>
+                            `;
+                            methodInfo.classList.remove('hidden');
+                        } else {
+                            methodInfo.classList.add('hidden');
+                        }
+                    } else {
+                        methodInfo.classList.add('hidden');
+                    }
+                });
             } catch (e) { console.error('loadDepositMethods', e); }
         }
 
@@ -771,23 +922,154 @@
         async function loadBets() {
             if (!currentUser) return;
             try {
-                const res = await fetch(`/api/user/${currentUser.telegram_id}/bets?limit=5`);
+                const res = await fetch(`/api/user/${currentUser.telegram_id}/bets?limit=20`);
                 const bets = await res.json();
-                const container = document.getElementById('betsList');
-                if (bets.length === 0) {
-                    container.innerHTML = '<p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p>';
-                } else {
-                    let html = '';
-                    bets.forEach(b => {
-                        html += `<div class="bg-gray-800/50 p-3 rounded-xl flex justify-between items-center">
-                                    <div><span class="font-bold">🎰 ${b.lottery} - ${b.bet_type}</span><p class="text-xs text-gray-400">${new Date(b.placed_at).toLocaleString()}</p></div>
-                                    <div class="text-right"><span class="text-cyan-300">${b.cost_cup} CUP</span><span class="text-gray-400 text-xs block">${b.cost_usd} USD</span></div>
-                                </div>`;
-                    });
-                    container.innerHTML = html;
-                }
+                userBets = bets;
+                renderBetsList(bets);
             } catch (e) { console.error(e); }
         }
+
+        function renderBetsList(bets) {
+            const container = document.getElementById('betsList');
+            if (!bets || bets.length === 0) {
+                container.innerHTML = '<p class="text-gray-400 text-center py-4">No tienes jugadas aún.</p>';
+                return;
+            }
+            
+            let html = '';
+            bets.forEach(b => {
+                const date = new Date(b.placed_at).toLocaleString();
+                html += `<div class="bg-gray-800/50 p-3 rounded-xl bet-item" onclick="showBetDetail(${b.id})">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <span class="font-bold">🎰 ${b.lottery} - ${b.bet_type}</span>
+                            <p class="text-xs text-gray-400">${date}</p>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-cyan-300">${b.cost_cup} CUP</span>
+                            <span class="text-gray-400 text-xs block">${b.cost_usd} USD</span>
+                        </div>
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+
+        // Función para mostrar detalle de jugada
+        window.showBetDetail = async (betId) => {
+            const bet = userBets.find(b => b.id === betId);
+            if (!bet) return;
+
+            // Verificar si la sesión aún está abierta para permitir editar/cancelar
+            let sessionOpen = false;
+            if (bet.session_id) {
+                try {
+                    const res = await fetch(`/api/lottery-sessions/${bet.session_id}`);
+                    const session = await res.json();
+                    sessionOpen = session && session.status === 'open';
+                } catch (e) {}
+            }
+
+            // Construir HTML del detalle
+            let itemsHtml = '';
+            if (bet.items && bet.items.length > 0) {
+                bet.items.forEach(item => {
+                    itemsHtml += `<div class="bet-detail-item">
+                        <span class="font-mono">${escapeHTML(item.numero)}</span>
+                        <span class="float-right">${item.cup > 0 ? item.cup + ' CUP' : ''} ${item.usd > 0 ? item.usd + ' USD' : ''}</span>
+                    </div>`;
+                });
+            } else {
+                itemsHtml = '<p class="text-gray-400">No hay detalles</p>';
+            }
+
+            const actionsHtml = sessionOpen ? `
+                <div class="flex gap-2 mt-4">
+                    <button onclick="editBet(${bet.id})" class="flex-1 bg-blue-600 py-2 rounded-lg edit-cancel-btn">✏️ Editar</button>
+                    <button onclick="cancelBet(${bet.id})" class="flex-1 bg-red-600 py-2 rounded-lg edit-cancel-btn">🗑 Cancelar</button>
+                </div>
+            ` : '';
+
+            betDetailModalBody.innerHTML = `
+                <h4 class="text-xl font-bold mb-2">Detalle de la jugada</h4>
+                <p class="text-sm text-gray-300 mb-1">🎰 ${bet.lottery} - ${bet.bet_type}</p>
+                <p class="text-xs text-gray-400 mb-3">${new Date(bet.placed_at).toLocaleString()}</p>
+                
+                <div class="mb-3">
+                    <p class="font-semibold mb-1">📝 Números jugados:</p>
+                    ${itemsHtml}
+                </div>
+                
+                <div class="bg-gray-700/50 p-2 rounded-lg text-right">
+                    <p>Total: <span class="text-cyan-300">${bet.cost_cup} CUP</span> / <span class="text-yellow-300">${bet.cost_usd} USD</span></p>
+                </div>
+                
+                ${actionsHtml}
+                
+                <button onclick="document.getElementById('betDetailModal').classList.add('hidden')" class="mt-4 w-full bg-gray-600 py-2 rounded-lg">Cerrar</button>
+            `;
+            betDetailModal.classList.remove('hidden');
+        };
+
+        // Función para editar jugada (cargar en el formulario de juego)
+        window.editBet = (betId) => {
+            const bet = userBets.find(b => b.id === betId);
+            if (!bet) return;
+
+            // Cambiar a la sección de juego
+            showSection('play');
+            
+            // Seleccionar la lotería correspondiente
+            const lotteryBtn = document.querySelector(`[data-lottery="${bet.lottery}"]`);
+            if (lotteryBtn) {
+                lotteryBtn.click();
+                
+                // Esperar a que se cargue la sesión y luego seleccionar el tipo y cargar el texto
+                setTimeout(() => {
+                    const typeBtn = document.querySelector(`[data-type="${bet.bet_type}"]`);
+                    if (typeBtn) {
+                        typeBtn.click();
+                        setTimeout(() => {
+                            betInput.value = bet.raw_text;
+                            betInput.dispatchEvent(new Event('input'));
+                            iziToast.info({ message: 'Jugada cargada para editar. Puedes modificarla y registrar de nuevo.' });
+                        }, 500);
+                    }
+                }, 1000);
+            }
+            
+            betDetailModal.classList.add('hidden');
+        };
+
+        // Función para cancelar jugada
+        window.cancelBet = async (betId) => {
+            if (!confirm('¿Estás seguro de cancelar esta jugada? Se te reembolsará el monto.')) return;
+            
+            const bet = userBets.find(b => b.id === betId);
+            if (!bet) return;
+
+            try {
+                const res = await fetch(`/api/bets/${betId}/cancel`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    iziToast.success({ message: 'Jugada cancelada y saldo reembolsado' });
+                    currentUser = data.updatedUser;
+                    updateBalanceUI();
+                    loadBets();
+                    betDetailModal.classList.add('hidden');
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al cancelar' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+            }
+        };
 
         async function loadReferralStats() {
             if (!currentUser) return;
@@ -798,16 +1080,6 @@
                 const link = `https://t.me/${botUsername}?start=${currentUser.telegram_id}`;
                 document.getElementById('referralLink').value = link;
             } catch (e) { console.error(e); }
-        }
-
-        function parseAmountFromLine(line) {
-            line = line.toLowerCase().trim();
-            let usd = 0, cup = 0;
-            const usdMatch = line.match(/(\d+(?:\.\d+)?)\s*usd/);
-            const cupMatch = line.match(/(\d+(?:\.\d+)?)\s*cup/);
-            if (usdMatch) usd = parseFloat(usdMatch[1]);
-            if (cupMatch) cup = parseFloat(cupMatch[1]);
-            return { usd, cup };
         }
 
         // ========== FUNCIONES DE ADMIN ==========
@@ -929,7 +1201,6 @@
                 if (!data.winning_number) {
                     modalContent += `<p class="text-yellow-300">Aún no se ha publicado número ganador.</p>`;
                 } else {
-                    // Formatear número: primeros 3 dígitos, espacio, últimos 4
                     const winningNumber = data.winning_number;
                     const formattedNumber = winningNumber.length === 7 ? winningNumber.slice(0,3) + ' ' + winningNumber.slice(3) : winningNumber;
                     modalContent += `<p class="mb-3">🔢 Número ganador: <span class="font-mono bg-gray-900 px-2 py-1 rounded">${formattedNumber}</span></p>`;
@@ -1198,7 +1469,6 @@
             });
         }
 
-        // ========== ADMIN: Precios y Pagos (separados) ==========
         async function renderSetPricesView() {
             try {
                 const res = await fetch('/api/play-prices');
@@ -1291,7 +1561,6 @@
             });
         }
 
-        // ========== ADMIN: Mínimo de retiro en CUP (conversión a USD) ==========
         async function renderSetMinWithdrawView() {
             try {
                 const rateRes = await fetch('/api/exchange-rate');
@@ -1418,7 +1687,6 @@
 
         // Modificar el evento de retiro para validar horario
         submitWithdrawBtn.addEventListener('click', async () => {
-            // Verificar horario
             if (!isWithdrawTime()) {
                 iziToast.error({ 
                     title: 'Fuera de horario', 
@@ -1449,7 +1717,7 @@
             } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
         });
 
-        // ========== TRANSFERENCIA ACTUALIZADA (por username, monto en CUP) ==========
+        // Transferencia con username
         document.getElementById('submitTransferBtn').addEventListener('click', async () => {
             const targetInput = document.getElementById('transferTarget').value.trim();
             const amountCUP = parseFloat(document.getElementById('transferAmountCUP').value);
@@ -1459,14 +1727,12 @@
                 return;
             }
 
-            // Verificar que el usuario tenga suficientes CUP (convertido a USD para la verificación de saldo)
             const amountUSD = amountCUP / exchangeRate;
             if (amountUSD > parseFloat(currentUser.usd)) {
                 iziToast.warning({ message: 'Saldo USD insuficiente para la transferencia (equivalente a CUP)' });
                 return;
             }
 
-            // Limpiar @ si existe
             let identifier = targetInput;
             if (identifier.startsWith('@')) {
                 identifier = identifier.slice(1);
@@ -1478,7 +1744,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         from: currentUser.telegram_id, 
-                        to: identifier,   // puede ser username o ID, el backend debe manejarlo
+                        to: identifier,
                         amount: amountUSD 
                     })
                 });
