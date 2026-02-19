@@ -1003,7 +1003,7 @@ app.post('/api/admin/min-deposit', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Configurar mínimo retiro ---
+// --- Configurar mínimo retiro (global) ---
 app.post('/api/admin/min-withdraw', requireAdmin, async (req, res) => {
     const { value } = req.body;
     if (!value || value <= 0) {
