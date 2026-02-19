@@ -397,7 +397,7 @@
                 </div>
             </div>
 
-            <!-- SECCIÓN ADMIN -->
+            <!-- SECCIÓN ADMIN (SIN BOTÓN MÍN. RETIRO) -->
             <div id="section-admin" class="section hidden-section">
                 <div class="glass-card p-5">
                     <h3 class="text-2xl font-bold mb-4 flex items-center"><i class="fas fa-crown text-yellow-400 mr-2"></i>Panel Admin</h3>
@@ -413,7 +413,6 @@
                         <button data-admin-view="setRate" class="admin-nav-btn bg-green-600/80 p-3 rounded-xl hover:bg-green-700"><i class="fas fa-dollar-sign mr-1"></i> Tasa de Cambio</button>
                         <button data-admin-view="setPrices" class="admin-nav-btn bg-purple-600/80 p-3 rounded-xl hover:bg-purple-700"><i class="fas fa-dice mr-1"></i> Pagos, Mín y Máx</button>
                         <button data-admin-view="setMinDeposit" class="admin-nav-btn bg-amber-600/80 p-3 rounded-xl hover:bg-amber-700"><i class="fas fa-arrow-down mr-1"></i> Mín. Depósito</button>
-                        <button data-admin-view="setMinWithdraw" class="admin-nav-btn bg-rose-600/80 p-3 rounded-xl hover:bg-rose-700"><i class="fas fa-arrow-up mr-1"></i> Mín. Retiro</button>
                         <button data-admin-view="viewData" class="admin-nav-btn bg-gray-600/80 p-3 rounded-xl hover:bg-gray-700"><i class="fas fa-eye mr-1"></i> Ver Datos</button>
                     </div>
                     <div id="adminViewContainer" class="mt-4"><p class="text-center text-gray-400">Selecciona una opción</p></div>
@@ -893,6 +892,7 @@
         async function loadDepositMethods() {
             try {
                 const res = await fetch('/api/deposit-methods');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 depositMethods = await res.json();
                 const select = document.getElementById('depositMethodSelect');
                 if (select) {
@@ -934,12 +934,16 @@
                         depositMethodLimits.innerHTML = '';
                     }
                 });
-            } catch (e) { console.error('loadDepositMethods', e); }
+            } catch (e) { 
+                console.error('loadDepositMethods', e);
+                iziToast.error({ message: 'Error al cargar métodos de depósito' });
+            }
         }
 
         async function loadWithdrawMethods() {
             try {
                 const res = await fetch('/api/withdraw-methods');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 withdrawMethods = await res.json();
                 const select = document.getElementById('withdrawMethodSelect');
                 if (select) {
@@ -976,25 +980,47 @@
                         withdrawMethodLimits.innerHTML = '';
                     }
                 });
-            } catch (e) { console.error('loadWithdrawMethods', e); }
+            } catch (e) { 
+                console.error('loadWithdrawMethods', e);
+                iziToast.error({ message: 'Error al cargar métodos de retiro' });
+            }
         }
 
         async function loadPlayPrices() {
-            try { const res = await fetch('/api/play-prices'); playPrices = await res.json(); } catch (e) { console.error(e); }
+            try { 
+                const res = await fetch('/api/play-prices'); 
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                playPrices = await res.json(); 
+            } catch (e) { 
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar precios' });
+            }
         }
 
         async function loadExchangeRate() {
-            try { const res = await fetch('/api/exchange-rate'); const data = await res.json(); exchangeRate = data.rate; } catch (e) { console.error(e); }
+            try { 
+                const res = await fetch('/api/exchange-rate'); 
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json(); 
+                exchangeRate = data.rate; 
+            } catch (e) { 
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar tasa de cambio' });
+            }
         }
 
         async function loadBets() {
             if (!currentUser) return;
             try {
                 const res = await fetch(`/api/user/${currentUser.telegram_id}/bets?limit=20`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const bets = await res.json();
                 userBets = bets;
                 renderBetsList(bets);
-            } catch (e) { console.error(e); }
+            } catch (e) { 
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar historial' });
+            }
         }
 
         function renderBetsList(bets) {
@@ -1031,8 +1057,10 @@
             if (bet.session_id) {
                 try {
                     const res = await fetch(`/api/lottery-sessions/${bet.session_id}`);
-                    const session = await res.json();
-                    sessionOpen = session && session.status === 'open';
+                    if (res.ok) {
+                        const session = await res.json();
+                        sessionOpen = session && session.status === 'open';
+                    }
                 } catch (e) {}
             }
 
@@ -1135,11 +1163,15 @@
             if (!currentUser) return;
             try {
                 const res = await fetch(`/api/user/${currentUser.telegram_id}/referrals/count`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 document.getElementById('referralCount').innerText = data.count || 0;
                 const link = `https://t.me/${botUsername}?start=${currentUser.telegram_id}`;
                 document.getElementById('referralLink').value = link;
-            } catch (e) { console.error(e); }
+            } catch (e) { 
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar referidos' });
+            }
         }
 
         document.getElementById('rechargeBtn').addEventListener('click', () => {
@@ -1543,6 +1575,7 @@
         async function renderEditDepositView() {
             try {
                 const res = await fetch('/api/deposit-methods');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const methods = await res.json();
                 let html = `<h4 class="text-xl font-semibold mb-4">✏️ Editar método de DEPÓSITO</h4>`;
                 if (methods.length === 0) {
@@ -1550,18 +1583,22 @@
                 } else {
                     methods.forEach(m => {
                         html += `<div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
-                            <div><span class="font-bold">${escapeHTML(m.name)}</span><br><small>${escapeHTML(m.card)} / ${escapeHTML(m.confirm)} (${m.currency})</small></div>
+                            <div><span class="font-bold">${escapeHTML(m.name)}</span><br><small>${escapeHTML(m.card)} / ${escapeHTML(m.confirm)} (${m.currency}) Mín: ${m.min_amount !== null ? m.min_amount : '-'} Máx: ${m.max_amount !== null ? m.max_amount : '-'}</small></div>
                             <button onclick="openEditDepositModal(${m.id})" class="method-edit-btn"><i class="fas fa-edit"></i> Editar</button>
                         </div>`;
                     });
                 }
                 adminViewContainer.innerHTML = html;
-            } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>'; }
+            } catch (e) { 
+                console.error(e);
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos. Verifique la conexión con el backend.</p>';
+            }
         }
 
         window.openEditDepositModal = async (methodId) => {
             try {
                 const res = await fetch(`/api/deposit-methods/${methodId}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const method = await res.json();
                 modalBody.innerHTML = `
                     <h4 class="text-xl font-bold mb-4">Editar Depósito ID ${methodId}</h4>
@@ -1584,7 +1621,10 @@
                     <button onclick="document.getElementById('adminModal').classList.add('hidden')" class="w-full bg-gray-600 py-2 rounded-lg mt-2">Cancelar</button>
                 `;
                 adminModal.classList.remove('hidden');
-            } catch (e) { iziToast.error({ message: 'Error al cargar método' }); }
+            } catch (e) { 
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar método' });
+            }
         };
 
         window.saveEditDeposit = async (methodId) => {
@@ -1622,6 +1662,7 @@
         async function renderEditWithdrawView() {
             try {
                 const res = await fetch('/api/withdraw-methods');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const methods = await res.json();
                 let html = `<h4 class="text-xl font-semibold mb-4">✏️ Editar método de RETIRO</h4>`;
                 if (methods.length === 0) {
@@ -1629,18 +1670,22 @@
                 } else {
                     methods.forEach(m => {
                         html += `<div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
-                            <div><span class="font-bold">${escapeHTML(m.name)}</span><br><small>${escapeHTML(m.card)} / ${escapeHTML(m.confirm)} (${m.currency})</small></div>
+                            <div><span class="font-bold">${escapeHTML(m.name)}</span><br><small>${escapeHTML(m.card)} / ${escapeHTML(m.confirm)} (${m.currency}) Mín: ${m.min_amount !== null ? m.min_amount : '-'} Máx: ${m.max_amount !== null ? m.max_amount : '-'}</small></div>
                             <button onclick="openEditWithdrawModal(${m.id})" class="method-edit-btn"><i class="fas fa-edit"></i> Editar</button>
                         </div>`;
                     });
                 }
                 adminViewContainer.innerHTML = html;
-            } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>'; }
+            } catch (e) { 
+                console.error(e);
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos. Verifique la conexión con el backend.</p>';
+            }
         }
 
         window.openEditWithdrawModal = async (methodId) => {
             try {
                 const res = await fetch(`/api/withdraw-methods/${methodId}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const method = await res.json();
                 modalBody.innerHTML = `
                     <h4 class="text-xl font-bold mb-4">Editar Retiro ID ${methodId}</h4>
@@ -1663,7 +1708,10 @@
                     <button onclick="document.getElementById('adminModal').classList.add('hidden')" class="w-full bg-gray-600 py-2 rounded-lg mt-2">Cancelar</button>
                 `;
                 adminModal.classList.remove('hidden');
-            } catch (e) { iziToast.error({ message: 'Error al cargar método' }); }
+            } catch (e) { 
+                console.error(e);
+                iziToast.error({ message: 'Error al cargar método' });
+            }
         };
 
         window.saveEditWithdraw = async (methodId) => {
@@ -1701,6 +1749,7 @@
         async function renderDeleteDepositView() {
             try {
                 const res = await fetch('/api/deposit-methods');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const methods = await res.json();
                 let html = `<h4 class="text-xl font-semibold mb-4">🗑 Eliminar método de DEPÓSITO</h4>`;
                 if (methods.length === 0) {
@@ -1714,7 +1763,10 @@
                     });
                 }
                 adminViewContainer.innerHTML = html;
-            } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>'; }
+            } catch (e) { 
+                console.error(e);
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>';
+            }
         }
 
         window.deleteDepositMethod = async (methodId) => {
@@ -1738,6 +1790,7 @@
         async function renderDeleteWithdrawView() {
             try {
                 const res = await fetch('/api/withdraw-methods');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const methods = await res.json();
                 let html = `<h4 class="text-xl font-semibold mb-4">🗑 Eliminar método de RETIRO</h4>`;
                 if (methods.length === 0) {
@@ -1751,7 +1804,10 @@
                     });
                 }
                 adminViewContainer.innerHTML = html;
-            } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>'; }
+            } catch (e) { 
+                console.error(e);
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar métodos.</p>';
+            }
         }
 
         window.deleteWithdrawMethod = async (methodId) => {
@@ -1793,6 +1849,7 @@
         async function renderSetPricesView() {
             try {
                 const res = await fetch('/api/play-prices');
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const prices = await res.json();
                 let html = `<h4 class="text-xl font-semibold mb-4">🎲 Pagos, Mínimos y Máximos</h4>`;
                 prices.forEach(p => {
@@ -1832,7 +1889,10 @@
                     </div>`;
                 });
                 adminViewContainer.innerHTML = html;
-            } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar precios.</p>'; }
+            } catch (e) { 
+                console.error(e);
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar precios.</p>';
+            }
         }
 
         window.updatePlayPrice = async (betType) => {
@@ -1870,7 +1930,7 @@
             } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
         };
 
-        // --- Mínimo depósito ---
+        // --- Mínimo depósito (global) ---
         async function renderSetMinDepositView() {
             const minDep = await fetch('/api/config/min-deposit').then(r=>r.json()).then(d=>d.value).catch(()=>1);
             adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">💰 Mínimo de depósito (USD)</h4><input type="number" id="minDeposit" step="0.01" min="0" value="${minDep}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-amber-500 mb-3"><button id="saveMinDeposit" class="w-full bg-amber-600 py-3 rounded-xl font-semibold hover:bg-amber-700">Guardar</button>`;
@@ -1887,45 +1947,6 @@
                     else iziToast.error({ message: 'Error' });
                 } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
             });
-        }
-
-        // --- Mínimo retiro (en CUP) ---
-        async function renderSetMinWithdrawView() {
-            try {
-                const rateRes = await fetch('/api/exchange-rate');
-                const rateData = await rateRes.json();
-                const rate = rateData.rate;
-                const minWitUSD = await fetch('/api/config/min-withdraw').then(r=>r.json()).then(d=>d.value).catch(()=>1);
-                const minWitCUP = (minWitUSD * rate).toFixed(2);
-                adminViewContainer.innerHTML = `<h4 class="text-xl font-semibold mb-4">💰 Mínimo de retiro (CUP)</h4>
-                    <p class="text-sm text-gray-300 mb-2">Tasa actual: 1 USD = ${rate} CUP</p>
-                    <input type="number" id="minWithdrawCUP" step="0.01" min="0" value="${minWitCUP}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-rose-500 mb-3">
-                    <p class="text-sm text-gray-300 mb-3">Equivalente en USD: <span id="minWithdrawUSDEquivalent">${minWitUSD.toFixed(2)} USD</span></p>
-                    <button id="saveMinWithdraw" class="w-full bg-rose-600 py-3 rounded-xl font-semibold hover:bg-rose-700">Guardar</button>`;
-                
-                document.getElementById('minWithdrawCUP').addEventListener('input', function() {
-                    const cupVal = parseFloat(this.value) || 0;
-                    const usdEquiv = (cupVal / rate).toFixed(2);
-                    document.getElementById('minWithdrawUSDEquivalent').innerText = usdEquiv + ' USD';
-                });
-
-                document.getElementById('saveMinWithdraw')?.addEventListener('click', async () => {
-                    const cupVal = parseFloat(document.getElementById('minWithdrawCUP').value);
-                    if (isNaN(cupVal) || cupVal < 0) { iziToast.warning({ message: 'Valor inválido' }); return; }
-                    const usdVal = cupVal / rate;
-                    try {
-                        const res = await fetch('/api/admin/min-withdraw', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ value: usdVal, userId: currentUser.telegram_id })
-                        });
-                        if (res.ok) iziToast.success({ message: 'Mínimo actualizado' });
-                        else iziToast.error({ message: 'Error' });
-                    } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
-                });
-            } catch (e) {
-                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar configuración.</p>';
-            }
         }
 
         // --- Ver datos actuales ---
@@ -1954,7 +1975,10 @@
                 );
 
                 adminViewContainer.innerHTML = `<pre class="whitespace-pre-wrap font-mono text-sm text-gray-200 bg-gray-800/50 p-4 rounded-xl">${text}</pre>`;
-            } catch (e) { adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar datos.</p>'; }
+            } catch (e) { 
+                console.error(e);
+                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar datos.</p>';
+            }
         }
 
         // Asignar funciones de admin a los botones
@@ -1973,7 +1997,6 @@
                 else if (view === 'setRate') renderSetRateView();
                 else if (view === 'setPrices') renderSetPricesView();
                 else if (view === 'setMinDeposit') renderSetMinDepositView();
-                else if (view === 'setMinWithdraw') renderSetMinWithdrawView();
                 else if (view === 'viewData') renderViewDataView();
             });
         });
@@ -1989,6 +2012,27 @@
                 iziToast.error({ message: 'La aplicación se cargó con demora.' });
             }
         }, 5000);
+
+        // Función auxiliar escapeHTML
+        function escapeHTML(str) {
+            return String(str).replace(/[&<>"]/g, function(m) {
+                if (m === '&') return '&amp;';
+                if (m === '<') return '&lt;';
+                if (m === '>') return '&gt;';
+                if (m === '"') return '&quot;';
+                return m;
+            });
+        }
+
+        function parseAmount(text) {
+            const lower = text.toLowerCase().replace(',', '.').trim();
+            let usd = 0, cup = 0;
+            const usdMatch = lower.match(/(\d+(?:\.\d+)?)\s*usd/);
+            const cupMatch = lower.match(/(\d+(?:\.\d+)?)\s*cup/);
+            if (usdMatch) usd = parseFloat(usdMatch[1]);
+            if (cupMatch) cup = parseFloat(cupMatch[1]);
+            return { usd, cup };
+        }
     })();
 </script>
 </body>
