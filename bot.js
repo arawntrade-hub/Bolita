@@ -1,131 +1,99 @@
 // ==============================
-// bot.js - Bot de Telegram para 4pu3$t4$_Qva
-// Versión con soporte multi-moneda (CUP, USD, USDT, TRX, MLC)
-// Tasas configurables por admin
-// Emojis regionales en números ganadores
+// backend.js - API REST + Bot de Telegram (UNIFICADO)
+// Versión simplificada: solo saldos CUP y USD en usuarios
+// Métodos pueden ser en cualquier moneda, conversión automática al aprobar
+// Incluye todos los endpoints de admin, apuestas, transferencias, etc.
 // ==============================
 
 require('dotenv').config();
-const { Telegraf, Markup } = require('telegraf');
-const { message } = require('telegraf/filters');
-const LocalSession = require('telegraf-session-local');
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
-const cron = require('node-cron');
-const moment = require('moment-timezone');
+const crypto = require('crypto');
 const axios = require('axios');
+const cors = require('cors');
+const moment = require('moment-timezone');
+
+// ========== IMPORTAR BOT DE TELEGRAM ==========
+const bot = require('./bot');
 
 // ========== CONFIGURACIÓN DESDE .ENV ==========
+const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [];
-const ADMIN_CHANNEL = process.env.ADMIN_CHANNEL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const BONUS_CUP_DEFAULT = parseFloat(process.env.BONUS_CUP_DEFAULT) || 70; // Bono en CUP
+const BONUS_CUP_DEFAULT = parseFloat(process.env.BONUS_CUP_DEFAULT) || 70;
+const WEBAPP_URL = process.env.WEBAPP_URL || `http://localhost:${PORT}`;
 const TIMEZONE = process.env.TIMEZONE || 'America/Havana';
-const WEBAPP_URL = process.env.WEBAPP_URL || 'http://localhost:3000';
-
-// ========== HORARIO DE RETIROS (hora Cuba) ==========
-const WITHDRAW_HOURS = { start: 22, end: 23.5 }; // 22:00 a 23:30
-
-function isWithdrawTime() {
-    const now = moment.tz(TIMEZONE);
-    const currentHour = now.hour() + now.minute() / 60;
-    return currentHour >= WITHDRAW_HOURS.start && currentHour < WITHDRAW_HOURS.end;
-}
 
 // ========== INICIALIZAR SUPABASE ==========
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-// ========== INICIALIZAR BOT ==========
-const bot = new Telegraf(BOT_TOKEN);
+// ========== INICIALIZAR EXPRESS ==========
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'webapp')));
 
-// ========== CONFIGURAR COMANDOS DEL MENÚ LATERAL ==========
-bot.telegram.setMyCommands([
-  { command: 'start', description: '🏠 Inicio' },
-  { command: 'jugar', description: '🎲 Jugar' },
-  { command: 'mi_dinero', description: '💰 Mi dinero' },
-  { command: 'mis_jugadas', description: '📋 Mis jugadas' },
-  { command: 'referidos', description: '👥 Referidos' },
-  { command: 'ayuda', description: '❓ Ayuda' },
-  { command: 'webapp', description: '🌐 Abrir WebApp' }
-]).catch(err => console.error('Error al setear comandos:', err));
+// ========== CONFIGURACIÓN DE MULTER ==========
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+});
 
-// ========== SESIÓN LOCAL ==========
-const localSession = new LocalSession({ database: 'session_db.json' });
-bot.use(localSession.middleware());
-
-// ========== FUNCIÓN PARA VERIFICAR SI UN USUARIO ES ADMIN ==========
-function isAdmin(userId) {
-    return ADMIN_IDS.includes(userId);
-}
+// ========== MAPA DE REGIONES CON EMOJIS ==========
+const regionMap = {
+    'Florida': { key: 'florida', emoji: '🦩' },
+    'Georgia': { key: 'georgia', emoji: '🍑' },
+    'Nueva York': { key: 'newyork', emoji: '🗽' }
+};
 
 // ========== FUNCIONES AUXILIARES ==========
 
-function escapeHTML(text) {
-    if (!text) return '';
-    return String(text)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
+function isAdmin(userId) {
+    return ADMIN_IDS.includes(parseInt(userId));
 }
 
-async function safeEdit(ctx, text, keyboard = null) {
-    try {
-        if (ctx.callbackQuery) {
-            await ctx.editMessageText(text, {
-                parse_mode: 'HTML',
-                reply_markup: keyboard?.reply_markup
-            });
-        } else {
-            await ctx.reply(text, {
-                parse_mode: 'HTML',
-                reply_markup: keyboard?.reply_markup
-            });
-        }
-    } catch (err) {
-        console.warn('Error en safeEdit, enviando nuevo mensaje:', err.message);
-        try {
-            await ctx.reply(text, {
-                parse_mode: 'HTML',
-                reply_markup: keyboard?.reply_markup
-            });
-        } catch (e) {}
-    }
+function verifyTelegramWebAppData(initData, botToken) {
+    const encoded = decodeURIComponent(initData);
+    const arr = encoded.split('&');
+    const hashIndex = arr.findIndex(e => e.startsWith('hash='));
+    const hash = arr.splice(hashIndex)[0].split('=')[1];
+    arr.sort((a, b) => a.localeCompare(b));
+    const dataCheckString = arr.join('\n');
+    const secretKey = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+    const computedHash = crypto.createHmac('sha256', secretKey).update(dataCheckString).digest('hex');
+    return computedHash === hash;
 }
 
-// Obtener tasa de cambio USD/CUP
+// Obtener todas las tasas
+async function getExchangeRates() {
+    const { data } = await supabase
+        .from('exchange_rate')
+        .select('rate, rate_usdt, rate_trx')
+        .eq('id', 1)
+        .single();
+    return data || { rate: 110, rate_usdt: 110, rate_trx: 1 };
+}
+
 async function getExchangeRateUSD() {
-    const { data } = await supabase
-        .from('exchange_rate')
-        .select('rate')
-        .eq('id', 1)
-        .single();
-    return data?.rate || 110;
+    const rates = await getExchangeRates();
+    return rates.rate;
 }
 
-// Obtener tasa de cambio USDT/CUP
 async function getExchangeRateUSDT() {
-    const { data } = await supabase
-        .from('exchange_rate')
-        .select('rate_usdt')
-        .eq('id', 1)
-        .single();
-    return data?.rate_usdt || 110; // Por defecto igual a USD
+    const rates = await getExchangeRates();
+    return rates.rate_usdt;
 }
 
-// Obtener tasa de cambio TRX/CUP
 async function getExchangeRateTRX() {
-    const { data } = await supabase
-        .from('exchange_rate')
-        .select('rate_trx')
-        .eq('id', 1)
-        .single();
-    return data?.rate_trx || 1; // Ejemplo: 1 TRX = 1 CUP (ajustable)
+    const rates = await getExchangeRates();
+    return rates.rate_trx;
 }
 
-// Actualizar tasas
 async function setExchangeRateUSD(rate) {
     await supabase
         .from('exchange_rate')
@@ -147,8 +115,34 @@ async function setExchangeRateTRX(rate) {
         .eq('id', 1);
 }
 
-// ========== FUNCIÓN GETUSER MODIFICADA PARA AÑADIR BONO DE BIENVENIDA Y USERNAME ==========
-async function getUser(telegramId, firstName = 'Jugador', username = null) {
+// Convertir cualquier moneda a CUP
+async function convertToCUP(amount, currency) {
+    const rates = await getExchangeRates();
+    switch (currency) {
+        case 'CUP': return amount;
+        case 'USD': return amount * rates.rate;
+        case 'USDT': return amount * rates.rate_usdt;
+        case 'TRX': return amount * rates.rate_trx;
+        case 'MLC': return amount * rates.rate; // MLC se trata como USD
+        default: return 0;
+    }
+}
+
+// Convertir de CUP a otra moneda
+async function convertFromCUP(amountCUP, targetCurrency) {
+    const rates = await getExchangeRates();
+    switch (targetCurrency) {
+        case 'CUP': return amountCUP;
+        case 'USD': return amountCUP / rates.rate;
+        case 'USDT': return amountCUP / rates.rate_usdt;
+        case 'TRX': return amountCUP / rates.rate_trx;
+        case 'MLC': return amountCUP / rates.rate;
+        default: return 0;
+    }
+}
+
+// ========== FUNCIÓN GETORCREATEUSER (solo CUP/USD) ==========
+async function getOrCreateUser(telegramId, firstName = 'Jugador', username = null) {
     let { data: user } = await supabase
         .from('users')
         .select('*')
@@ -156,46 +150,39 @@ async function getUser(telegramId, firstName = 'Jugador', username = null) {
         .single();
 
     if (!user) {
-        // Calcular bono de bienvenida en CUP (principal)
-        const bonusCUP = BONUS_CUP_DEFAULT;
-
         const { data: newUser } = await supabase
             .from('users')
-            .insert({ 
-                telegram_id: telegramId, 
+            .insert({
+                telegram_id: telegramId,
                 first_name: firstName,
                 username: username,
-                bonus_cup: bonusCUP,
-                // Otros saldos iniciales en 0
+                bonus_cup: BONUS_CUP_DEFAULT,
                 cup: 0,
-                usd: 0,
-                usdt: 0,
-                trx: 0,
-                mlc: 0
+                usd: 0
             })
             .select()
             .single();
         user = newUser;
 
-        // Enviar mensaje de bienvenida con el bono
         try {
             await bot.telegram.sendMessage(telegramId,
                 `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
-                `Has recibido <b>${bonusCUP} CUP</b> como bono no retirable.\n` +
+                `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
                 `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
                 { parse_mode: 'HTML' }
             );
         } catch (e) {}
     } else {
-        // Actualizar username si cambió
         if (username && user.username !== username) {
-            await supabase.from('users').update({ username }).eq('telegram_id', telegramId);
+            await supabase
+                .from('users')
+                .update({ username })
+                .eq('telegram_id', telegramId);
         }
     }
     return user;
 }
 
-// Mínimos en USD (para compatibilidad con configuraciones anteriores)
 async function getMinDepositUSD() {
     const { data } = await supabase
         .from('app_config')
@@ -226,7 +213,7 @@ async function setMinWithdrawUSD(value) {
         .upsert({ key: 'min_withdraw_usd', value: value.toString() }, { onConflict: 'key' });
 }
 
-// Parsear monto con moneda (ej: "500 cup", "10 usdt", "100 trx")
+// Parsear monto con moneda (ej: "500 cup", "10 usdt")
 function parseAmountWithCurrency(text) {
     const lower = text.toLowerCase().replace(',', '.').trim();
     const match = lower.match(/^(\d+(?:\.\d+)?)\s*(cup|usd|usdt|trx|mlc)$/);
@@ -237,47 +224,17 @@ function parseAmountWithCurrency(text) {
     };
 }
 
-// Convertir cualquier moneda a CUP (para acreditar/débitos)
-async function convertToCUP(amount, currency) {
-    const rateUSD = await getExchangeRateUSD();
-    const rateUSDT = await getExchangeRateUSDT();
-    const rateTRX = await getExchangeRateTRX();
-    switch (currency) {
-        case 'CUP': return amount;
-        case 'USD': return amount * rateUSD;
-        case 'USDT': return amount * rateUSDT;
-        case 'TRX': return amount * rateTRX;
-        case 'MLC': return amount * rateUSD; // MLC se trata como USD
-        default: return 0;
-    }
-}
-
-// Convertir de CUP a otra moneda (para mostrar equivalencias)
-async function convertFromCUP(amountCUP, targetCurrency) {
-    const rateUSD = await getExchangeRateUSD();
-    const rateUSDT = await getExchangeRateUSDT();
-    const rateTRX = await getExchangeRateTRX();
-    switch (targetCurrency) {
-        case 'CUP': return amountCUP;
-        case 'USD': return amountCUP / rateUSD;
-        case 'USDT': return amountCUP / rateUSDT;
-        case 'TRX': return amountCUP / rateTRX;
-        case 'MLC': return amountCUP / rateUSD;
-        default: return 0;
-    }
-}
-
-// ========== FUNCIONES PARA APUESTAS (sin cambios, pero adaptadas para manejar items con moneda) ==========
+// ========== FUNCIONES DE PARSEO DE APUESTAS (sin cambios) ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return [];
 
-    const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(cup|usd)?$/);
+    const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(cup|usd)?$/i);
     if (!match) return [];
 
     let numerosStr = match[1].trim();
     const montoStr = match[2];
-    const moneda = match[3] || 'usd'; // Por defecto USD por compatibilidad
+    const moneda = (match[3] || 'usd').toUpperCase();
 
     const numeros = numerosStr.split(/[\s,]+/).filter(n => n.length > 0);
     const montoBase = parseFloat(montoStr);
@@ -313,7 +270,7 @@ function parseBetLine(line, betType) {
 
         resultados.push({
             numero: numeroGuardado,
-            currency: moneda.toUpperCase(),
+            currency: moneda,
             amount: montoReal
         });
     }
@@ -324,7 +281,7 @@ function parseBetLine(line, betType) {
 function parseBetMessage(text, betType) {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
     const items = [];
-    let totalCUP = 0, totalUSD = 0; // Para mantener compatibilidad con código existente, pero ahora usaremos currency
+    let totalCUP = 0, totalUSD = 0;
 
     for (const line of lines) {
         const parsedItems = parseBetLine(line, betType);
@@ -332,7 +289,6 @@ function parseBetMessage(text, betType) {
             items.push(item);
             if (item.currency === 'CUP') totalCUP += item.amount;
             else if (item.currency === 'USD') totalUSD += item.amount;
-            // Otros? Por ahora solo CUP y USD en apuestas (podríamos extender)
         }
     }
 
@@ -344,33 +300,41 @@ function parseBetMessage(text, betType) {
     };
 }
 
-// Mapa para convertir nombres de lotería a claves internas y emojis
-const regionMap = {
-    'Florida': { key: 'florida', emoji: '🦩' },
-    'Georgia': { key: 'georgia', emoji: '🍑' },
-    'Nueva York': { key: 'newyork', emoji: '🗽' }
-};
-
 function getEndTimeFromSlot(lottery, timeSlot) {
     const region = regionMap[lottery];
     if (!region) return null;
-    const schedule = getAllowedHours(region.key);
-    if (!schedule) return null;
-    const slot = schedule.slots.find(s => s.name === timeSlot);
+    const schedules = {
+        florida: {
+            slots: [
+                { name: '🌅 Mañana', end: 13 },
+                { name: '🌙 Noche', end: 21 }
+            ]
+        },
+        georgia: {
+            slots: [
+                { name: '🌅 Mañana', end: 12 },
+                { name: '☀️ Tarde', end: 18.5 },
+                { name: '🌙 Noche', end: 23 }
+            ]
+        },
+        newyork: {
+            slots: [
+                { name: '🌅 Mañana', end: 14 },
+                { name: '🌙 Noche', end: 22 }
+            ]
+        }
+    };
+    const regionSched = schedules[region.key];
+    if (!regionSched) return null;
+    const slot = regionSched.slots.find(s => s.name === timeSlot);
     if (!slot) return null;
-    
     const now = moment.tz(TIMEZONE);
-    const today = now.format('YYYY-MM-DD');
-    
     let hour = Math.floor(slot.end);
     let minute = (slot.end % 1) * 60;
-    
-    const endTime = moment.tz(`${today} ${hour}:${minute}:00`, 'YYYY-MM-DD HH:mm:ss', TIMEZONE);
-    
+    const endTime = now.clone().hour(hour).minute(minute).second(0).millisecond(0);
     if (now.isSameOrAfter(endTime)) {
         return null;
     }
-    
     return endTime.toDate();
 }
 
@@ -389,16 +353,182 @@ async function broadcastToAllUsers(message, parseMode = 'HTML') {
     }
 }
 
-// Crear solicitud de depósito (ahora incluye currency)
-async function createDepositRequest(userId, methodId, fileBuffer, amountText, currency) {
+// ========== MIDDLEWARE DE ADMIN ==========
+async function requireAdmin(req, res, next) {
+    let userId = req.body.userId || req.query.userId || req.headers['x-telegram-id'];
+    if (!userId) {
+        return res.status(403).json({ error: 'No autorizado: falta userId' });
+    }
+    if (!isAdmin(userId)) {
+        return res.status(403).json({ error: 'No autorizado: no eres admin' });
+    }
+    next();
+}
+
+// ========== ENDPOINTS PÚBLICOS ==========
+
+// --- Autenticación ---
+app.post('/api/auth', async (req, res) => {
+    const { initData } = req.body;
+    if (!initData) return res.status(400).json({ error: 'Falta initData' });
+
+    const verified = verifyTelegramWebAppData(initData, BOT_TOKEN);
+    if (!verified) return res.status(401).json({ error: 'Firma inválida' });
+
+    const params = new URLSearchParams(decodeURIComponent(initData));
+    const userStr = params.get('user');
+    if (!userStr) return res.status(400).json({ error: 'No hay datos de usuario' });
+
+    const tgUser = JSON.parse(userStr);
+    const user = await getOrCreateUser(tgUser.id, tgUser.first_name, tgUser.username);
+    const rates = await getExchangeRates();
+
+    const botInfo = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`)
+        .then(r => r.data.result)
+        .catch(() => ({ username: '4pu3$t4$_QvaBot' }));
+
+    res.json({
+        user,
+        isAdmin: isAdmin(tgUser.id),
+        exchangeRate: rates.rate,
+        exchangeRateUSDT: rates.rate_usdt,
+        exchangeRateTRX: rates.rate_trx,
+        botUsername: botInfo.username,
+        bonusCupDefault: BONUS_CUP_DEFAULT
+    });
+});
+
+// --- Métodos de depósito (con moneda y límites) ---
+app.get('/api/deposit-methods', async (req, res) => {
+    const { data } = await supabase.from('deposit_methods').select('*').order('id');
+    res.json(data || []);
+});
+app.get('/api/deposit-methods/:id', async (req, res) => {
+    const { data } = await supabase.from('deposit_methods').select('*').eq('id', req.params.id).single();
+    res.json(data);
+});
+
+// --- Métodos de retiro (con moneda y límites) ---
+app.get('/api/withdraw-methods', async (req, res) => {
+    const { data } = await supabase.from('withdraw_methods').select('*').order('id');
+    res.json(data || []);
+});
+app.get('/api/withdraw-methods/:id', async (req, res) => {
+    const { data } = await supabase.from('withdraw_methods').select('*').eq('id', req.params.id).single();
+    res.json(data);
+});
+
+// --- Precios de jugadas (globales) ---
+app.get('/api/play-prices', async (req, res) => {
+    const { data } = await supabase.from('play_prices').select('*');
+    res.json(data || []);
+});
+
+// --- Tasas de cambio ---
+app.get('/api/exchange-rates', async (req, res) => {
+    const rates = await getExchangeRates();
+    res.json(rates);
+});
+
+// --- Mínimo depósito (público) ---
+app.get('/api/config/min-deposit', async (req, res) => {
+    const value = await getMinDepositUSD();
+    res.json({ value });
+});
+
+// --- Mínimo retiro (público) ---
+app.get('/api/config/min-withdraw', async (req, res) => {
+    const value = await getMinWithdrawUSD();
+    res.json({ value });
+});
+
+// --- Números ganadores (últimos 10) con formato 123 4567 ---
+app.get('/api/winning-numbers', async (req, res) => {
+    const { data } = await supabase
+        .from('winning_numbers')
+        .select('*')
+        .order('published_at', { ascending: false })
+        .limit(10);
+    const formatted = (data || []).map(w => ({
+        ...w,
+        formatted_number: w.numbers[0].replace(/(\d{3})(\d{4})/, '$1 $2')
+    }));
+    res.json(formatted);
+});
+
+// --- Sesión activa para una lotería y turno específico ---
+app.get('/api/lottery-sessions/active', async (req, res) => {
+    const { lottery, date, time_slot } = req.query;
+    if (!lottery || !date || !time_slot) {
+        return res.status(400).json({ error: 'Faltan parámetros' });
+    }
+    const { data } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('lottery', lottery)
+        .eq('date', date)
+        .eq('time_slot', time_slot)
+        .eq('status', 'open')
+        .maybeSingle();
+    res.json(data);
+});
+
+// --- Obtener sesión por ID ---
+app.get('/api/lottery-sessions/:id', async (req, res) => {
+    const { id } = req.params;
+    const { data } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('id', id)
+        .single();
+    res.json(data);
+});
+
+// --- Solicitud de depósito (con captura) ---
+app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) => {
+    const { methodId, userId, amount, currency } = req.body;
+    const file = req.file;
+    if (!methodId || !userId || !file || !amount || !currency) {
+        return res.status(400).json({ error: 'Faltan datos' });
+    }
+
+    const user = await getOrCreateUser(parseInt(userId));
+    const { data: method } = await supabase
+        .from('deposit_methods')
+        .select('*')
+        .eq('id', methodId)
+        .single();
+
+    if (!method) {
+        return res.status(400).json({ error: 'Método no encontrado' });
+    }
+
+    if (method.currency !== currency) {
+        return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide.` });
+    }
+
+    const parsed = parseAmountWithCurrency(amount);
+    if (!parsed || parsed.currency !== currency) {
+        return res.status(400).json({ error: 'Formato de monto inválido' });
+    }
+
+    if (method.min_amount !== null && parsed.amount < method.min_amount) {
+        return res.status(400).json({ error: `Monto mínimo: ${method.min_amount} ${currency}` });
+    }
+    if (method.max_amount !== null && parsed.amount > method.max_amount) {
+        return res.status(400).json({ error: `Monto máximo: ${method.max_amount} ${currency}` });
+    }
+
     const fileName = `deposit_${userId}_${Date.now()}.jpg`;
     const filePath = `deposits/${fileName}`;
 
     const { error: uploadError } = await supabase.storage
         .from('deposit-screenshots')
-        .upload(filePath, fileBuffer, { contentType: 'image/jpeg' });
+        .upload(filePath, file.buffer, { contentType: 'image/jpeg' });
 
-    if (uploadError) throw new Error('Error al subir captura');
+    if (uploadError) {
+        return res.status(500).json({ error: 'Error al subir captura' });
+    }
 
     const { data: { publicUrl } } = supabase.storage
         .from('deposit-screenshots')
@@ -407,1206 +537,686 @@ async function createDepositRequest(userId, methodId, fileBuffer, amountText, cu
     const { data: request, error: insertError } = await supabase
         .from('deposit_requests')
         .insert({
-            user_id: userId,
-            method_id: methodId,
+            user_id: parseInt(userId),
+            method_id: parseInt(methodId),
             screenshot_url: publicUrl,
-            amount: amountText,
-            currency: currency,
+            amount: amount,
+            currency,
             status: 'pending'
         })
         .select()
         .single();
 
-    if (insertError) throw insertError;
-
-    return request;
-}
-
-// ========== TECLADOS ==========
-function getMainKeyboard(ctx) {
-    const buttons = [
-        ['🎲 Jugar', '💰 Mi dinero'],
-        ['📋 Mis jugadas', '👥 Referidos'],
-        ['❓ Cómo jugar', '🌐 Abrir WebApp']
-    ];
-    if (isAdmin(ctx.from.id)) {
-        buttons.push(['🔧 Admin']);
+    if (insertError) {
+        return res.status(500).json({ error: 'Error al guardar solicitud' });
     }
-    return Markup.keyboard(buttons).resize();
-}
 
-function playLotteryKbd() {
-    const buttons = [
-        [Markup.button.callback('🦩 Florida', 'lot_florida')],
-        [Markup.button.callback('🍑 Georgia', 'lot_georgia')],
-        [Markup.button.callback('🗽 Nueva York', 'lot_newyork')],
-        [Markup.button.callback('◀ Volver', 'main')]
-    ];
-    return Markup.inlineKeyboard(buttons);
-}
-
-function playTypeKbd() {
-    const buttons = [
-        [Markup.button.callback('🎯 Fijo', 'type_fijo')],
-        [Markup.button.callback('🏃 Corridos', 'type_corridos')],
-        [Markup.button.callback('💯 Centena', 'type_centena')],
-        [Markup.button.callback('🔒 Parle', 'type_parle')],
-        [Markup.button.callback('◀ Volver', 'play')]
-    ];
-    return Markup.inlineKeyboard(buttons);
-}
-
-function myMoneyKbd() {
-    const buttons = [
-        [Markup.button.callback('📥 Recargar', 'recharge')],
-        [Markup.button.callback('📤 Retirar', 'withdraw')],
-        [Markup.button.callback('🔄 Transferir', 'transfer')],
-        [Markup.button.callback('◀ Volver', 'main')]
-    ];
-    return Markup.inlineKeyboard(buttons);
-}
-
-function adminPanelKbd() {
-    const buttons = [
-        [Markup.button.callback('🎰 Gestionar sesiones', 'admin_sessions')],
-        [Markup.button.callback('🔢 Publicar ganadores', 'admin_winning')],
-        [Markup.button.callback('➕ Añadir método DEPÓSITO', 'adm_add_dep')],
-        [Markup.button.callback('✏️ Editar método DEPÓSITO', 'adm_edit_dep')],
-        [Markup.button.callback('🗑 Eliminar método DEPÓSITO', 'adm_delete_dep')],
-        [Markup.button.callback('➕ Añadir método RETIRO', 'adm_add_wit')],
-        [Markup.button.callback('✏️ Editar método RETIRO', 'adm_edit_wit')],
-        [Markup.button.callback('🗑 Eliminar método RETIRO', 'adm_delete_wit')],
-        [Markup.button.callback('💰 Configurar tasa USD/CUP', 'adm_set_rate_usd')],
-        [Markup.button.callback('💰 Configurar tasa USDT/CUP', 'adm_set_rate_usdt')],
-        [Markup.button.callback('💰 Configurar tasa TRX/CUP', 'adm_set_rate_trx')],
-        [Markup.button.callback('🎲 Configurar precios y pagos', 'adm_set_prices')],
-        [Markup.button.callback('💰 Mínimos por jugada', 'adm_min_per_bet')],
-        [Markup.button.callback('💰 Mínimo depósito (USD)', 'adm_min_deposit')],
-        [Markup.button.callback('💰 Mínimo retiro (USD)', 'adm_min_withdraw')],
-        [Markup.button.callback('📋 Ver datos actuales', 'adm_view')],
-        [Markup.button.callback('◀ Menú principal', 'main')]
-    ];
-    return Markup.inlineKeyboard(buttons);
-}
-
-function getAllowedHours(lotteryKey) {
-    const schedules = {
-        florida: {
-            name: 'Florida',
-            emoji: '🦩',
-            slots: [
-                { name: '🌅 Mañana', start: 9, end: 13 },
-                { name: '🌙 Noche',  start: 14, end: 21 }
-            ]
-        },
-        georgia: {
-            name: 'Georgia',
-            emoji: '🍑',
-            slots: [
-                { name: '🌅 Mañana', start: 9, end: 12 },
-                { name: '☀️ Tarde',  start: 14, end: 18.5 },
-                { name: '🌙 Noche',  start: 20, end: 23 }
-            ]
-        },
-        newyork: {
-            name: 'Nueva York',
-            emoji: '🗽',
-            slots: [
-                { name: '🌅 Mañana', start: 9, end: 14 },
-                { name: '🌙 Noche',  start: 15, end: 22 }
-            ]
-        }
-    };
-    return schedules[lotteryKey];
-}
-
-// Middleware para cargar usuario
-bot.use(async (ctx, next) => {
-    const uid = ctx.from?.id;
-    if (uid) {
+    for (const adminId of ADMIN_IDS) {
         try {
-            const firstName = ctx.from.first_name || 'Jugador';
-            const username = ctx.from.username || null;
-            ctx.dbUser = await getUser(uid, firstName, username);
-        } catch (e) {
-            console.error('Error cargando usuario:', e);
-        }
-    }
-    return next();
-});
-
-// Comandos
-bot.command('start', async (ctx) => {
-    const uid = ctx.from.id;
-    const firstName = ctx.from.first_name || 'Jugador';
-    const refParam = ctx.payload;
-
-    if (refParam) {
-        const refId = parseInt(refParam);
-        if (refId && refId !== uid) {
-            await supabase
-                .from('users')
-                .update({ ref_by: refId })
-                .eq('telegram_id', uid);
-        }
-    }
-
-    await safeEdit(ctx,
-        `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido a 4pu3$t4$_Qva, tu asistente de la suerte 🍀\n\n` +
-        `Estamos encantados de tenerte aquí. ¿Listo para jugar y ganar? 🎲\n\n` +
-        `Usa los botones del menú para explorar todas las opciones. Si tienes dudas, solo escríbenos.`,
-        getMainKeyboard(ctx)
-    );
-});
-
-bot.command('jugar', async (ctx) => {
-    await safeEdit(ctx, '🎲 Por favor, selecciona una lotería para comenzar a jugar:', playLotteryKbd());
-});
-
-bot.command('mi_dinero', async (ctx) => {
-    const user = ctx.dbUser;
-    const rateUSD = await getExchangeRateUSD();
-    const rateUSDT = await getExchangeRateUSDT();
-    const rateTRX = await getExchangeRateTRX();
-
-    const cup = parseFloat(user.cup);
-    const usd = parseFloat(user.usd);
-    const usdt = parseFloat(user.usdt);
-    const trx = parseFloat(user.trx);
-    const mlc = parseFloat(user.mlc);
-    const bonusCup = parseFloat(user.bonus_cup);
-
-    const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-        `🇨🇺 <b>CUP:</b> ${cup.toFixed(2)} (principal)\n` +
-        `💵 <b>USD:</b> ${usd.toFixed(2)} (≈ ${(usd * rateUSD).toFixed(2)} CUP)\n` +
-        `₮ <b>USDT:</b> ${usdt.toFixed(2)} (≈ ${(usdt * rateUSDT).toFixed(2)} CUP)\n` +
-        `🔷 <b>TRX:</b> ${trx.toFixed(2)} (≈ ${(trx * rateTRX).toFixed(2)} CUP)\n` +
-        `💳 <b>MLC:</b> ${mlc.toFixed(2)} (≈ ${(mlc * rateUSD).toFixed(2)} CUP)\n` +
-        `🎁 <b>Bono (no retirable):</b> ${bonusCup.toFixed(2)} CUP\n\n` +
-        `¿Qué deseas hacer?`;
-    await safeEdit(ctx, text, myMoneyKbd());
-});
-
-bot.command('mis_jugadas', async (ctx) => {
-    const uid = ctx.from.id;
-    const { data: bets } = await supabase
-        .from('bets')
-        .select('*')
-        .eq('user_id', uid)
-        .order('placed_at', { ascending: false })
-        .limit(5);
-
-    if (!bets || bets.length === 0) {
-        await safeEdit(ctx,
-            '📭 Aún no has realizado ninguna jugada. ¡Anímate a participar! 🎲\n\n' +
-            'Para jugar, selecciona "🎲 Jugar" en el menú y sigue las instrucciones. Estamos aquí para ayudarte.',
-            getMainKeyboard(ctx)
-        );
-    } else {
-        let text = '📋 <b>Tus últimas 5 jugadas:</b>\n\n';
-        bets.forEach((b, i) => {
-            const date = moment(b.placed_at).tz(TIMEZONE).format('DD/MM/YYYY HH:mm');
-            // Mostrar items simplificado
-            text += `<b>${i + 1}.</b> 🎰 ${escapeHTML(b.lottery)} - ${escapeHTML(b.bet_type)}\n` +
-                `   📝 <code>${escapeHTML(b.raw_text)}</code>\n` +
-                `   💰 Costo: ${b.items.map(it => `${it.amount} ${it.currency}`).join(', ')}\n` +
-                `   🕒 ${date}\n\n`;
-        });
-        text += '¿Quieres ver más? Puedes consultar el historial completo en la WebApp.';
-        await safeEdit(ctx, text, getMainKeyboard(ctx));
-    }
-});
-
-bot.command('referidos', async (ctx) => {
-    const uid = ctx.from.id;
-    const { count } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('ref_by', uid);
-
-    const botInfo = await ctx.telegram.getMe();
-    const link = `https://t.me/${botInfo.username}?start=${uid}`;
-
-    await safeEdit(ctx,
-        `💸 <b>¡GANA DINERO EXTRA INVITANDO AMIGOS! 💰</b>\n\n` +
-        `🎯 <b>¿Cómo funciona?</b>\n` +
-        `1️⃣ Comparte tu enlace personal con amigos\n` +
-        `2️⃣ Cuando se registren y jueguen, tú ganas una comisión\n` +
-        `3️⃣ Recibirás un porcentaje de CADA apuesta que realicen\n` +
-        `4️⃣ ¡Es automático y para siempre! 🔄\n\n` +
-        `🔥 Sin límites, sin topes, sin esfuerzo.\n\n` +
-        `📲 <b>Tu enlace mágico:</b> 👇\n` +
-        `<code>${escapeHTML(link)}</code>\n\n` +
-        `📊 <b>Tus estadísticas:</b>\n` +
-        `👥 Referidos registrados: ${count || 0}\n\n` +
-        `¡Comparte y empieza a ganar hoy mismo!`,
-        getMainKeyboard(ctx)
-    );
-});
-
-bot.command('ayuda', async (ctx) => {
-    await safeEdit(ctx,
-        '📩 <b>¿Tienes dudas o necesitas ayuda?</b>\n\n' +
-        'Puedes escribir directamente en este chat. Tu mensaje será recibido por nuestro equipo de soporte y te responderemos a la mayor brevedad.\n\n' +
-        'También puedes consultar la sección de preguntas frecuentes en nuestra WebApp.',
-        Markup.inlineKeyboard([[Markup.button.callback('◀ Volver al inicio', 'main')]])
-    );
-});
-
-bot.command('webapp', async (ctx) => {
-    const webAppButton = Markup.inlineKeyboard([
-        Markup.button.webApp('🚀 Abrir WebApp', `${WEBAPP_URL}/app.html`)
-    ]);
-    await ctx.reply('Haz clic en el botón para acceder a nuestra plataforma web interactiva:', webAppButton);
-});
-
-// Acciones
-bot.action('main', async (ctx) => {
-    const firstName = ctx.from.first_name || 'Jugador';
-    await safeEdit(ctx,
-        `👋 ¡Hola de nuevo, ${escapeHTML(firstName)}! ¿En qué podemos ayudarte hoy?\n\n` +
-        `Selecciona una opción del menú para continuar.`,
-        getMainKeyboard(ctx)
-    );
-});
-
-bot.action('play', async (ctx) => {
-    await safeEdit(ctx, '🎲 Elige una lotería para comenzar:', playLotteryKbd());
-});
-
-bot.action(/lot_(.+)/, async (ctx) => {
-    try {
-        const lotteryKey = ctx.match[1];
-        const lotteryName = lotteryKey === 'florida' ? 'Florida' : lotteryKey === 'georgia' ? 'Georgia' : 'Nueva York';
-        const region = regionMap[lotteryName];
-        const schedule = getAllowedHours(lotteryKey);
-
-        const now = moment.tz(TIMEZONE);
-        const currentMinutes = now.hours() * 60 + now.minutes();
-        const isAllowed = schedule.slots.some(slot => {
-            const startMinutes = slot.start * 60;
-            const endMinutes = slot.end * 60;
-            return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
-        });
-
-        if (!isAllowed) {
-            let hoursText = '';
-            for (const slot of schedule.slots) {
-                const startStr = moment().tz(TIMEZONE).hours(Math.floor(slot.start)).minutes((slot.start % 1) * 60).format('h:mm A');
-                const endStr = moment().tz(TIMEZONE).hours(Math.floor(slot.end)).minutes((slot.end % 1) * 60).format('h:mm A');
-                hoursText += `${slot.name}: ${startStr} - ${endStr}\n`;
-            }
-
-            const errorMsg = 
-                `⏰ <b>Horario no disponible para ${schedule.emoji} ${schedule.name}</b>\n\n` +
-                `📅 Los horarios permitidos (hora de Cuba) son:\n${hoursText}\n` +
-                `🔄 Por favor, intenta dentro del horario o elige otra lotería. ¡Te esperamos!`;
-
-            await safeEdit(ctx, errorMsg, playLotteryKbd());
-            return;
-        }
-
-        const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-        const { data: activeSession, error } = await supabase
-            .from('lottery_sessions')
-            .select('*')
-            .eq('lottery', lotteryName)
-            .eq('date', today)
-            .eq('status', 'open')
-            .maybeSingle();
-
-        if (error) {
-            console.error('Error al consultar sesión:', error);
-            await ctx.reply('❌ Lo sentimos, ocurrió un error al verificar la sesión. Por favor, intenta más tarde.', getMainKeyboard(ctx));
-            return;
-        }
-
-        if (!activeSession) {
-            let hoursText = '';
-            for (const slot of schedule.slots) {
-                const startStr = moment().tz(TIMEZONE).hours(Math.floor(slot.start)).minutes((slot.start % 1) * 60).format('h:mm A');
-                const endStr = moment().tz(TIMEZONE).hours(Math.floor(slot.end)).minutes((slot.end % 1) * 60).format('h:mm A');
-                hoursText += `${slot.name}: ${startStr} - ${endStr}\n`;
-            }
-            const errorMsg = 
-                `❌ <b>No hay una sesión abierta en este momento para ${schedule.emoji} ${schedule.name}</b>\n\n` +
-                `📅 Horarios de juego (hora de Cuba):\n${hoursText}\n` +
-                `🔄 Por favor, espera a que se abra una sesión o elige otra lotería. ¡Estamos contigo!`;
-            await safeEdit(ctx, errorMsg, playLotteryKbd());
-            return;
-        }
-
-        ctx.session.lottery = lotteryName;
-        ctx.session.sessionId = activeSession.id;
-        await safeEdit(ctx,
-            `✅ Has seleccionado <b>${escapeHTML(lotteryName)}</b> - Turno <b>${escapeHTML(activeSession.time_slot)}</b>.\n` +
-            `Ahora elige el tipo de jugada que deseas realizar:`,
-            playTypeKbd()
-        );
-    } catch (e) {
-        console.error('Error en lot_ handler:', e);
-        await ctx.reply('❌ Ups, ocurrió un error inesperado. Por favor, intenta de nuevo.', getMainKeyboard(ctx));
-    }
-});
-
-bot.action(/type_(.+)/, async (ctx) => {
-    const betType = ctx.match[1];
-    ctx.session.betType = betType;
-    ctx.session.awaitingBet = true;
-    const lottery = ctx.session.lottery || 'Florida';
-
-    const { data: price } = await supabase
-        .from('play_prices')
-        .select('payout_multiplier, amount_cup, amount_usd')
-        .eq('bet_type', betType)
-        .single();
-
-    let priceInfo = '';
-    if (price) {
-        priceInfo = `🎁 <b>Pago de Jugada:</b> x${price.payout_multiplier}\n` +
-                    `💰 Costo base: ${price.amount_cup} CUP / ${price.amount_usd} USD por cada número\n\n`;
-    }
-
-    let instructions = '';
-    switch (betType) {
-        case 'fijo':
-            instructions = `🎯 <b>FIJO</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
-                priceInfo +
-                `Escribe una línea por cada jugada. Puedes poner varios números separados por espacios o comas en la misma línea.\n` +
-                `<b>Formato:</b> <code>12 con 5 cup</code>  o  <code>09 10 34*2cup</code>\n` +
-                `También puedes usar <b>D</b> (decena) o <b>T</b> (terminal):\n` +
-                `- <code>D2 con 5 cup</code> significa TODOS los números que empiezan con 2 (20-29). El costo se multiplica por 10.\n` +
-                `- <code>T5 con 1 cup</code> significa TODOS los números que terminan con 5 (05,15,...,95). El costo se multiplica por 10.\n\n` +
-                `Ejemplos:\n12 con 1 cup\n09 10 34 con 50 cup\nD2 con 5 cup\nT5*1cup\n34*2 cup\n\n` +
-                `💭 <b>Escribe tus jugadas (una o varias líneas):</b>`;
-            break;
-        case 'corridos':
-            instructions = `🏃 <b>CORRIDOS</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
-                priceInfo +
-                `Escribe una línea por cada número de 2 DÍGITOS, o varios separados.\n` +
-                `<b>Formato:</b> <code>17 con 1 cup</code>  o  <code>32 33*0.5cup</code>\n\n` +
-                `Ejemplo:\n17 con 1 cup\n32 33*0.5 cup\n62 con 10 cup\n\n` +
-                `💭 <b>Escribe tus jugadas:</b>`;
-            break;
-        case 'centena':
-            instructions = `💯 <b>CENTENA</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
-                priceInfo +
-                `Escribe una línea por cada número de 3 DÍGITOS, o varios separados.\n` +
-                `<b>Formato:</b> <code>517 con 2 cup</code>  o  <code>019 123*1cup</code>\n\n` +
-                `Ejemplo:\n517 con 2 cup\n019 123*1 cup\n123 con 5 cup\n\n` +
-                `💭 <b>Escribe tus jugadas:</b>`;
-            break;
-        case 'parle':
-            instructions = `🔒 <b>PARLE</b> - 🎰 ${escapeHTML(lottery)}\n\n` +
-                priceInfo +
-                `Escribe una línea por cada combinación de dos números de 2 dígitos separados por "x".\n` +
-                `<b>Formato:</b> <code>17x32 con 1 cup</code>  o  <code>17x62*2cup</code>\n\n` +
-                `Ejemplo:\n17x32 con 1 cup\n17x62*2 cup\n32x62 con 5 cup\n\n` +
-                `💭 <b>Escribe tus parles:</b>`;
-            break;
-    }
-    await safeEdit(ctx, instructions, null);
-});
-
-bot.action('my_money', async (ctx) => {
-    const user = ctx.dbUser;
-    const rateUSD = await getExchangeRateUSD();
-    const rateUSDT = await getExchangeRateUSDT();
-    const rateTRX = await getExchangeRateTRX();
-
-    const cup = parseFloat(user.cup);
-    const usd = parseFloat(user.usd);
-    const usdt = parseFloat(user.usdt);
-    const trx = parseFloat(user.trx);
-    const mlc = parseFloat(user.mlc);
-    const bonusCup = parseFloat(user.bonus_cup);
-
-    const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-        `🇨🇺 <b>CUP:</b> ${cup.toFixed(2)} (principal)\n` +
-        `💵 <b>USD:</b> ${usd.toFixed(2)} (≈ ${(usd * rateUSD).toFixed(2)} CUP)\n` +
-        `₮ <b>USDT:</b> ${usdt.toFixed(2)} (≈ ${(usdt * rateUSDT).toFixed(2)} CUP)\n` +
-        `🔷 <b>TRX:</b> ${trx.toFixed(2)} (≈ ${(trx * rateTRX).toFixed(2)} CUP)\n` +
-        `💳 <b>MLC:</b> ${mlc.toFixed(2)} (≈ ${(mlc * rateUSD).toFixed(2)} CUP)\n` +
-        `🎁 <b>Bono (no retirable):</b> ${bonusCup.toFixed(2)} CUP\n\n` +
-        `¿Qué deseas hacer?`;
-    await safeEdit(ctx, text, myMoneyKbd());
-});
-
-// DEPÓSITO
-bot.action('recharge', async (ctx) => {
-    const minDepositUSD = await getMinDepositUSD();
-    const rateUSD = await getExchangeRateUSD();
-    const { data: methods } = await supabase
-        .from('deposit_methods')
-        .select('*')
-        .order('id', { ascending: true });
-
-    if (!methods || methods.length === 0) {
-        await ctx.answerCbQuery('❌ Por el momento no hay métodos de depósito disponibles. Intenta más tarde.', { show_alert: true });
-        return;
-    }
-
-    const buttons = methods.map(m => [Markup.button.callback(`${m.name} (${m.currency})`, `dep_${m.id}`)]);
-    buttons.push([Markup.button.callback('◀ Volver', 'my_money')]);
-
-    await safeEdit(ctx,
-        `💵 <b>Recargar saldo</b>\n\n` +
-        `Elige un método de pago. Luego deberás enviar una captura de pantalla de la transferencia realizada.\n\n` +
-        `<b>Mínimo de depósito:</b> ${minDepositUSD} USD (equivalente a ${(minDepositUSD * rateUSD).toFixed(2)} CUP) para métodos en USD. Para otras monedas, el mínimo se convierte automáticamente.\n\n` +
-        `Selecciona el método:`,
-        Markup.inlineKeyboard(buttons)
-    );
-});
-
-bot.action(/dep_(\d+)/, async (ctx) => {
-    const methodId = parseInt(ctx.match[1]);
-    const { data: method } = await supabase
-        .from('deposit_methods')
-        .select('*')
-        .eq('id', methodId)
-        .single();
-
-    if (!method) {
-        await ctx.answerCbQuery('Método no encontrado. Por favor, selecciona otro.', { show_alert: true });
-        return;
-    }
-
-    ctx.session.depositMethod = method;
-    ctx.session.awaitingDepositPhoto = true;
-
-    // Instrucciones adicionales para cripto
-    let extraInstructions = '';
-    if (method.currency === 'USDT' || method.currency === 'TRX') {
-        extraInstructions = `\n\n🔐 <b>Importante:</b>\n- Envía el monto exacto en ${method.currency} a la dirección indicada.\n- Asegúrate de usar la red correcta: ${method.card.includes('TRC20') ? 'TRC-20' : method.card.includes('BEP20') ? 'BEP-20' : 'la red especificada'}.\n- La captura debe mostrar claramente el hash de la transacción (TXID) y el monto.`;
-    }
-
-    await safeEdit(ctx,
-        `🧾 <b>${escapeHTML(method.name)}</b>\n` +
-        `Moneda: ${method.currency}\n` +
-        `Datos: <code>${escapeHTML(method.card)}</code>\n` +
-        `Confirmar: <code>${escapeHTML(method.confirm)}</code>\n${extraInstructions}\n\n` +
-        `📸 <b>Ahora, por favor, envía una captura de pantalla de la transferencia que realizaste.</b>\n` +
-        `(Asegúrate de que se vea claramente el monto, la moneda y, para cripto, el hash)`,
-        null
-    );
-});
-
-// RETIRO
-bot.action('withdraw', async (ctx) => {
-    if (!isWithdrawTime()) {
-        const startStr = moment.tz(TIMEZONE).hours(22).minutes(0).format('h:mm A');
-        const endStr = moment.tz(TIMEZONE).hours(23).minutes(30).format('h:mm A');
-        await ctx.answerCbQuery(
-            `⏰ Los retiros solo están disponibles de ${startStr} a ${endStr} (hora de Cuba). Por favor, intenta en ese horario.`,
-            { show_alert: true }
-        );
-        return;
-    }
-
-    const user = ctx.dbUser;
-    const minWithdrawUSD = await getMinWithdrawUSD();
-    const rateUSD = await getExchangeRateUSD();
-    const minWithdrawCUP = (minWithdrawUSD * rateUSD).toFixed(2);
-
-    // Verificar si tiene algún saldo (excluyendo bono)
-    const totalCUP = parseFloat(user.cup) + parseFloat(user.usd)*rateUSD + parseFloat(user.usdt)*await getExchangeRateUSDT() + parseFloat(user.trx)*await getExchangeRateTRX() + parseFloat(user.mlc)*rateUSD;
-    if (totalCUP < minWithdrawUSD * rateUSD) {
-        await ctx.answerCbQuery(`❌ Necesitas al menos ${minWithdrawCUP} CUP (o su equivalente en otras monedas) en tu saldo real para solicitar un retiro.`, { show_alert: true });
-        return;
-    }
-
-    const { data: methods } = await supabase
-        .from('withdraw_methods')
-        .select('*')
-        .order('id', { ascending: true });
-
-    if (!methods || methods.length === 0) {
-        await ctx.answerCbQuery('❌ Por el momento no hay métodos de retiro disponibles. Intenta más tarde.', { show_alert: true });
-        return;
-    }
-
-    const buttons = methods.map(m => [Markup.button.callback(`${m.name} (${m.currency})`, `wit_${m.id}`)]);
-    buttons.push([Markup.button.callback('◀ Volver', 'my_money')]);
-
-    await safeEdit(ctx, '📤 <b>Selecciona un método de retiro:</b>', Markup.inlineKeyboard(buttons));
-});
-
-bot.action(/wit_(\d+)/, async (ctx) => {
-    const methodId = parseInt(ctx.match[1]);
-    const { data: method } = await supabase
-        .from('withdraw_methods')
-        .select('*')
-        .eq('id', methodId)
-        .single();
-
-    if (!method) {
-        await ctx.answerCbQuery('Método no encontrado. Por favor, selecciona otro.', { show_alert: true });
-        return;
-    }
-
-    ctx.session.withdrawMethod = method;
-    ctx.session.awaitingWithdrawAmount = true;
-
-    const user = ctx.dbUser;
-    const minWithdrawUSD = await getMinWithdrawUSD();
-    const rateUSD = await getExchangeRateUSD();
-    const minWithdrawCUP = (minWithdrawUSD * rateUSD).toFixed(2);
-
-    // Mostrar saldo en la moneda del método
-    let saldoEnMoneda = 0;
-    switch (method.currency) {
-        case 'CUP': saldoEnMoneda = parseFloat(user.cup); break;
-        case 'USD': saldoEnMoneda = parseFloat(user.usd); break;
-        case 'USDT': saldoEnMoneda = parseFloat(user.usdt); break;
-        case 'TRX': saldoEnMoneda = parseFloat(user.trx); break;
-        case 'MLC': saldoEnMoneda = parseFloat(user.mlc); break;
-        default: saldoEnMoneda = 0;
-    }
-
-    await safeEdit(ctx,
-        `Has elegido <b>${escapeHTML(method.name)}</b> (moneda: ${method.currency}).\n\n` +
-        `💰 <b>Tu saldo disponible en ${method.currency}:</b> ${saldoEnMoneda.toFixed(2)}\n` +
-        `⏳ <b>Mínimo de retiro:</b> ${minWithdrawCUP} CUP (equivalente a ${minWithdrawUSD} USD).\n\n` +
-        `Por favor, escribe el <b>monto que deseas retirar</b> en ${method.currency} (ej: <code>500</code> para 500 ${method.currency}).\n` +
-        (method.currency === 'USDT' || method.currency === 'TRX' ? `\n🔐 Recuerda enviar el monto exacto a la wallet y luego proporcionar el hash.` : ''),
-        null
-    );
-});
-
-// TRANSFERENCIA
-bot.action('transfer', async (ctx) => {
-    ctx.session.awaitingTransferTarget = true;
-    await safeEdit(ctx,
-        '🔄 <b>Transferir saldo a otro usuario</b>\n\n' +
-        'Envía el <b>nombre de usuario</b> de Telegram (ej: @usuario) de la persona a la que deseas transferir.\n' +
-        'También puedes usar su ID numérico si lo conoces.\n\n' +
-        '⚠️ <b>Nota:</b> El bono no es transferible. Puedes transferir cualquier moneda (CUP, USD, USDT, TRX, MLC).\n\n' +
-        'Por favor, ingresa el usuario:',
-        null
-    );
-});
-
-bot.action('my_bets', async (ctx) => {
-    const uid = ctx.from.id;
-    const { data: bets } = await supabase
-        .from('bets')
-        .select('*')
-        .eq('user_id', uid)
-        .order('placed_at', { ascending: false })
-        .limit(5);
-
-    if (!bets || bets.length === 0) {
-        await safeEdit(ctx,
-            '📭 No tienes jugadas registradas. ¡Anímate a participar! 🎲\n\n' +
-            'Selecciona "🎲 Jugar" en el menú para empezar.',
-            getMainKeyboard(ctx)
-        );
-    } else {
-        let text = '📋 <b>Tus últimas 5 jugadas:</b>\n\n';
-        bets.forEach((b, i) => {
-            const date = moment(b.placed_at).tz(TIMEZONE).format('DD/MM/YYYY HH:mm');
-            text += `<b>${i + 1}.</b> 🎰 ${escapeHTML(b.lottery)} - ${escapeHTML(b.bet_type)}\n` +
-                `   📝 <code>${escapeHTML(b.raw_text)}</code>\n` +
-                `   💰 Costo: ${b.items.map(it => `${it.amount} ${it.currency}`).join(', ')}\n` +
-                `   🕒 ${date}\n\n`;
-        });
-        text += '¿Quieres ver más? Puedes consultar el historial completo en la WebApp.';
-        await safeEdit(ctx, text, getMainKeyboard(ctx));
-    }
-});
-
-bot.action('referrals', async (ctx) => {
-    const uid = ctx.from.id;
-    const { count } = await supabase
-        .from('users')
-        .select('*', { count: 'exact', head: true })
-        .eq('ref_by', uid);
-
-    const botInfo = await ctx.telegram.getMe();
-    const link = `https://t.me/${botInfo.username}?start=${uid}`;
-
-    await safeEdit(ctx,
-        `💸 <b>¡GANA DINERO EXTRA INVITANDO AMIGOS! 💰</b>\n\n` +
-        `🎯 <b>¿Cómo funciona?</b>\n` +
-        `1️⃣ Comparte tu enlace personal con amigos\n` +
-        `2️⃣ Cuando se registren y jueguen, tú ganas una comisión\n` +
-        `3️⃣ Recibirás un porcentaje de CADA apuesta que realicen\n` +
-        `4️⃣ ¡Es automático y para siempre! 🔄\n\n` +
-        `🔥 Sin límites, sin topes, sin esfuerzo.\n\n` +
-        `📲 <b>Tu enlace mágico:</b> 👇\n` +
-        `<code>${escapeHTML(link)}</code>\n\n` +
-        `📊 <b>Tus estadísticas:</b>\n` +
-        `👥 Referidos registrados: ${count || 0}\n\n` +
-        `¡Comparte y empieza a ganar hoy mismo!`,
-        getMainKeyboard(ctx)
-    );
-});
-
-bot.action('how_to_play', async (ctx) => {
-    await safeEdit(ctx,
-        '📩 <b>¿Necesitas ayuda?</b>\n\n' +
-        'Puedes escribirnos directamente en este chat. Nuestro equipo de soporte te responderá a la mayor brevedad.\n\n' +
-        'También puedes consultar la sección de preguntas frecuentes en nuestra WebApp.',
-        Markup.inlineKeyboard([[Markup.button.callback('◀ Volver al inicio', 'main')]])
-    );
-});
-
-// ADMIN PANEL
-bot.action('admin_panel', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        await ctx.answerCbQuery('⛔ No autorizado. Solo administradores.', { show_alert: true });
-        return;
-    }
-    await safeEdit(ctx, '🔧 <b>Panel de administración</b>\nSelecciona una opción:', adminPanelKbd());
-});
-
-// Gestionar sesiones (sin cambios importantes, solo usar emojis)
-bot.action('admin_sessions', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    await showRegionsMenu(ctx);
-});
-
-async function showRegionsMenu(ctx) {
-    const buttons = [
-        [Markup.button.callback('🦩 Florida', 'sess_region_Florida')],
-        [Markup.button.callback('🍑 Georgia', 'sess_region_Georgia')],
-        [Markup.button.callback('🗽 Nueva York', 'sess_region_Nueva York')],
-        [Markup.button.callback('◀ Volver a Admin', 'admin_panel')]
-    ];
-    await safeEdit(ctx, '🎰 <b>Gestionar sesiones de juego</b>\n\nSelecciona una región:', Markup.inlineKeyboard(buttons));
-}
-
-bot.action(/sess_region_(.+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const lottery = ctx.match[1];
-    await showRegionSessions(ctx, lottery);
-});
-
-async function showRegionSessions(ctx, lottery) {
-    try {
-        const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-        const { data: sessions } = await supabase
-            .from('lottery_sessions')
-            .select('*')
-            .eq('lottery', lottery)
-            .eq('date', today);
-
-        const region = regionMap[lottery];
-        if (!region) {
-            await ctx.answerCbQuery('❌ Región no válida', { show_alert: true });
-            return;
-        }
-        const schedule = getAllowedHours(region.key);
-
-        let text = `🎰 <b>${region.emoji} ${lottery}</b>\n📅 ${today}\n\n`;
-        const buttons = [];
-
-        for (const slot of schedule.slots) {
-            const turno = slot.name;
-            const session = sessions.find(s => s.time_slot === turno);
-            let estado, btnText, callbackData;
-            if (session) {
-                estado = session.status === 'open' ? '✅ Activa' : '🔴 Cerrada';
-                btnText = `${turno} (${estado}) - ${session.status === 'open' ? 'Cerrar' : 'Abrir'}`;
-                callbackData = `toggle_session_${session.id}_${session.status}`;
-            } else {
-                estado = '⚪ Inactiva';
-                btnText = `${turno} (${estado}) - Abrir`;
-                callbackData = `create_session_${lottery}_${turno}`;
-            }
-            buttons.push([Markup.button.callback(btnText, callbackData)]);
-            text += `• ${turno}: ${estado}\n`;
-        }
-
-        buttons.push([Markup.button.callback('◀ Cambiar región', 'admin_sessions')]);
-        buttons.push([Markup.button.callback('◀ Volver a Admin', 'admin_panel')]);
-
-        await safeEdit(ctx, text, Markup.inlineKeyboard(buttons));
-    } catch (e) {
-        console.error(e);
-        await ctx.answerCbQuery('❌ Error al cargar sesiones. Intenta más tarde.', { show_alert: true });
-    }
-}
-
-bot.action(/create_session_(.+)_(.+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    try {
-        const lottery = ctx.match[1];
-        const timeSlot = ctx.match[2];
-        const endTime = getEndTimeFromSlot(lottery, timeSlot);
-        if (!endTime) {
-            await ctx.answerCbQuery(`❌ La hora de cierre para el turno ${timeSlot} ya pasó hoy. No se puede abrir.`, { show_alert: true });
-            return;
-        }
-        const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
-
-        const { data: existing } = await supabase
-            .from('lottery_sessions')
-            .select('id')
-            .eq('lottery', lottery)
-            .eq('date', today)
-            .eq('time_slot', timeSlot)
-            .maybeSingle();
-
-        if (existing) {
-            await ctx.answerCbQuery('❌ Ya existe una sesión para este turno hoy.', { show_alert: true });
-            return;
-        }
-
-        const { error } = await supabase
-            .from('lottery_sessions')
-            .insert({
-                lottery,
-                date: today,
-                time_slot: timeSlot,
-                status: 'open',
-                end_time: endTime.toISOString()
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: adminId,
+                text: `📥 <b>Nueva solicitud de DEPÓSITO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n🏦 Método: ${method.name} (${currency})\n💰 Monto: ${amount}\n📎 <a href="${publicUrl}">Ver captura</a>\n🆔 Solicitud: ${request.id}`,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ Aprobar', callback_data: `approve_deposit_${request.id}` },
+                        { text: '❌ Rechazar', callback_data: `reject_deposit_${request.id}` }
+                    ]]
+                }
             });
-
-        if (error) throw error;
-
-        await ctx.answerCbQuery('✅ Sesión abierta correctamente');
-
-        const region = regionMap[lottery];
-        await broadcastToAllUsers(
-            `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
-            `✨ La región ${region.emoji} <b>${escapeHTML(lottery)}</b> acaba de abrir su turno de <b>${escapeHTML(timeSlot)}</b>.\n` +
-            `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
-            `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
-            `🍀 ¡La suerte te espera!`
-        );
-
-        await showRegionSessions(ctx, lottery);
-    } catch (e) {
-        console.error(e);
-        await ctx.answerCbQuery('❌ Error al abrir sesión. Revisa los logs.', { show_alert: true });
+        } catch (e) {
+            console.error('Error enviando notificación de depósito:', e);
+        }
     }
+
+    res.json({ success: true, requestId: request.id });
 });
 
-bot.action(/toggle_session_(\d+)_(.+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    try {
-        const sessionId = parseInt(ctx.match[1]);
-        const currentStatus = ctx.match[2];
-        const newStatus = currentStatus === 'open' ? 'closed' : 'open';
+// --- Solicitud de retiro ---
+app.post('/api/withdraw-requests', async (req, res) => {
+    const { methodId, amount, currency, userId, accountInfo } = req.body;
+    if (!methodId || !amount || !currency || !userId || !accountInfo) {
+        return res.status(400).json({ error: 'Faltan datos' });
+    }
 
-        const { error } = await supabase
-            .from('lottery_sessions')
-            .update({ status: newStatus, updated_at: new Date() })
-            .eq('id', sessionId);
+    const user = await getOrCreateUser(parseInt(userId));
+    const { data: method } = await supabase
+        .from('withdraw_methods')
+        .select('*')
+        .eq('id', methodId)
+        .single();
 
-        if (error) throw error;
+    if (!method) {
+        return res.status(400).json({ error: 'Método no encontrado' });
+    }
 
-        const { data: session } = await supabase
+    if (method.currency !== currency) {
+        return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide.` });
+    }
+
+    // Verificar saldo disponible según moneda
+    let saldoSuficiente = false;
+    let saldoMensaje = '';
+    if (currency === 'CUP') {
+        if (parseFloat(user.cup) >= amount) saldoSuficiente = true;
+        else saldoMensaje = `Saldo CUP insuficiente. Disponible: ${parseFloat(user.cup).toFixed(2)} CUP`;
+    } else if (currency === 'USD') {
+        if (parseFloat(user.usd) >= amount) saldoSuficiente = true;
+        else saldoMensaje = `Saldo USD insuficiente. Disponible: ${parseFloat(user.usd).toFixed(2)} USD`;
+    } else {
+        // Otras monedas: se debitará de CUP al aprobar, pero verificamos que tenga CUP suficiente
+        const cupNeeded = await convertToCUP(amount, currency);
+        if (parseFloat(user.cup) >= cupNeeded) saldoSuficiente = true;
+        else saldoMensaje = `Saldo CUP insuficiente. Necesitas ${cupNeeded.toFixed(2)} CUP.`;
+    }
+
+    if (!saldoSuficiente) {
+        return res.status(400).json({ error: saldoMensaje });
+    }
+
+    if (method.min_amount !== null && amount < method.min_amount) {
+        return res.status(400).json({ error: `Monto mínimo: ${method.min_amount} ${currency}` });
+    }
+    if (method.max_amount !== null && amount > method.max_amount) {
+        return res.status(400).json({ error: `Monto máximo: ${method.max_amount} ${currency}` });
+    }
+
+    const { data: request, error: insertError } = await supabase
+        .from('withdraw_requests')
+        .insert({
+            user_id: parseInt(userId),
+            method_id: parseInt(methodId),
+            amount,
+            currency,
+            account_info: accountInfo,
+            status: 'pending'
+        })
+        .select()
+        .single();
+
+    if (insertError) {
+        return res.status(500).json({ error: 'Error al crear solicitud' });
+    }
+
+    for (const adminId of ADMIN_IDS) {
+        try {
+            await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                chat_id: adminId,
+                text: `📤 <b>Nueva solicitud de RETIRO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n💰 Monto: ${amount} ${currency}\n🏦 Método: ${method.name} (${currency})\n📞 Cuenta: ${accountInfo}\n🆔 Solicitud: ${request.id}`,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[
+                        { text: '✅ Aprobar', callback_data: `approve_withdraw_${request.id}` },
+                        { text: '❌ Rechazar', callback_data: `reject_withdraw_${request.id}` }
+                    ]]
+                }
+            });
+        } catch (e) {}
+    }
+
+    res.json({ success: true, requestId: request.id });
+});
+
+// --- Transferencia entre usuarios (solo CUP y USD) ---
+app.post('/api/transfer', async (req, res) => {
+    const { from, to, amount, currency } = req.body;
+    if (!from || !to || !amount || !currency || amount <= 0) {
+        return res.status(400).json({ error: 'Datos inválidos' });
+    }
+    if (!['CUP', 'USD'].includes(currency)) {
+        return res.status(400).json({ error: 'Solo se permite transferir CUP o USD' });
+    }
+    if (from === to) {
+        return res.status(400).json({ error: 'No puedes transferirte a ti mismo' });
+    }
+
+    const userFrom = await getOrCreateUser(parseInt(from));
+    if (!userFrom) return res.status(404).json({ error: 'Usuario origen no encontrado' });
+
+    // Buscar usuario destino
+    let targetUserId = null;
+    let targetUser = null;
+    if (!isNaN(to) && typeof to === 'number' || !isNaN(parseInt(to))) {
+        targetUserId = parseInt(to);
+        const { data } = await supabase
+            .from('users')
+            .select('*')
+            .eq('telegram_id', targetUserId)
+            .single();
+        targetUser = data;
+    } else {
+        let username = to.replace(/^@/, '');
+        const { data } = await supabase
+            .from('users')
+            .select('*')
+            .eq('username', username)
+            .maybeSingle();
+        if (data) {
+            targetUser = data;
+            targetUserId = data.telegram_id;
+        }
+    }
+    if (!targetUser) {
+        return res.status(404).json({ error: 'Usuario destino no encontrado' });
+    }
+
+    // Verificar saldo origen
+    if (currency === 'CUP') {
+        if (parseFloat(userFrom.cup) < amount) {
+            return res.status(400).json({ error: 'Saldo CUP insuficiente' });
+        }
+    } else {
+        if (parseFloat(userFrom.usd) < amount) {
+            return res.status(400).json({ error: 'Saldo USD insuficiente' });
+        }
+    }
+
+    // Realizar transferencia
+    if (currency === 'CUP') {
+        await supabase
+            .from('users')
+            .update({ cup: parseFloat(userFrom.cup) - amount, updated_at: new Date() })
+            .eq('telegram_id', from);
+        await supabase
+            .from('users')
+            .update({ cup: parseFloat(targetUser.cup) + amount, updated_at: new Date() })
+            .eq('telegram_id', targetUserId);
+    } else {
+        await supabase
+            .from('users')
+            .update({ usd: parseFloat(userFrom.usd) - amount, updated_at: new Date() })
+            .eq('telegram_id', from);
+        await supabase
+            .from('users')
+            .update({ usd: parseFloat(targetUser.usd) + amount, updated_at: new Date() })
+            .eq('telegram_id', targetUserId);
+    }
+
+    res.json({ success: true });
+});
+
+// --- Registro de apuestas ---
+app.post('/api/bets', async (req, res) => {
+    const { userId, lottery, betType, rawText, sessionId } = req.body;
+    if (!userId || !lottery || !betType || !rawText) {
+        return res.status(400).json({ error: 'Faltan datos' });
+    }
+
+    if (sessionId) {
+        const { data: activeSession } = await supabase
             .from('lottery_sessions')
             .select('*')
             .eq('id', sessionId)
-            .single();
-
-        const region = regionMap[session.lottery];
-        if (newStatus === 'closed') {
-            await broadcastToAllUsers(
-                `🔴 <b>SESIÓN CERRADA</b>\n\n` +
-                `🎰 ${region.emoji} <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
-                `📅 Fecha: ${session.date}\n\n` +
-                `❌ Ya no se reciben más apuestas para esta sesión.\n` +
-                `🔢 Pronto anunciaremos el número ganador. ¡Mantente atento!`
-            );
+            .eq('status', 'open')
+            .maybeSingle();
+        if (!activeSession) {
+            return res.status(400).json({ error: 'La sesión de juego no está activa' });
         }
-
-        await ctx.answerCbQuery(newStatus === 'open' ? '✅ Sesión abierta' : '🔴 Sesión cerrada');
-        await showRegionSessions(ctx, session.lottery);
-    } catch (e) {
-        console.error(e);
-        await ctx.answerCbQuery('❌ Error al cambiar estado. Intenta más tarde.', { show_alert: true });
     }
-});
 
-// ========== ADMIN: AÑADIR MÉTODOS CON MONEDA ==========
-bot.action('adm_add_dep', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    ctx.session.adminAction = 'add_dep';
-    ctx.session.adminStep = 1;
-    await ctx.reply('➕ <b>Añadir nuevo método de DEPÓSITO</b>\n\nPaso 1/4: Escribe el <b>nombre</b> del método (ej: "USDT-TRC20", "Transfermovil CUP"):', { parse_mode: 'HTML' });
-    await ctx.answerCbQuery();
-});
-
-bot.action('adm_add_wit', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    ctx.session.adminAction = 'add_wit';
-    ctx.session.adminStep = 1;
-    await ctx.reply('➕ <b>Añadir nuevo método de RETIRO</b>\n\nPaso 1/4: Escribe el <b>nombre</b> del método (ej: "Efectivo USD", "USDT-BEP20"):', { parse_mode: 'HTML' });
-    await ctx.answerCbQuery();
-});
-
-// ========== ADMIN: EDITAR MÉTODOS ==========
-bot.action('adm_edit_dep', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const { data: methods } = await supabase.from('deposit_methods').select('*').order('id');
-    if (!methods || methods.length === 0) {
-        await ctx.answerCbQuery('No hay métodos de depósito para editar.', { show_alert: true });
-        return;
+    const user = await getOrCreateUser(parseInt(userId));
+    const parsed = parseBetMessage(rawText, betType);
+    if (!parsed.ok) {
+        return res.status(400).json({ error: 'No se pudo interpretar la apuesta' });
     }
-    const buttons = methods.map(m => [Markup.button.callback(`${m.name} (${m.currency})`, `edit_dep_${m.id}`)]);
-    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('✏️ <b>Editar método de DEPÓSITO</b>\nSelecciona el método que deseas modificar:', Markup.inlineKeyboard(buttons));
-    await ctx.answerCbQuery();
+
+    const totalUSD = parsed.totalUSD;
+    const totalCUP = parsed.totalCUP;
+    if (totalUSD === 0 && totalCUP === 0) {
+        return res.status(400).json({ error: 'Debes especificar un monto válido' });
+    }
+
+    const { data: priceData } = await supabase
+        .from('play_prices')
+        .select('min_cup, min_usd, max_cup, max_usd')
+        .eq('bet_type', betType)
+        .single();
+
+    const minCup = priceData?.min_cup || 0;
+    const minUsd = priceData?.min_usd || 0;
+    const maxCup = priceData?.max_cup;
+    const maxUsd = priceData?.max_usd;
+
+    for (const item of parsed.items) {
+        if (item.currency === 'CUP') {
+            if (item.amount < minCup) {
+                return res.status(400).json({ error: `Mínimo en CUP: ${minCup}` });
+            }
+            if (maxCup !== null && item.amount > maxCup) {
+                return res.status(400).json({ error: `Máximo en CUP: ${maxCup}` });
+            }
+        } else if (item.currency === 'USD') {
+            if (item.amount < minUsd) {
+                return res.status(400).json({ error: `Mínimo en USD: ${minUsd}` });
+            }
+            if (maxUsd !== null && item.amount > maxUsd) {
+                return res.status(400).json({ error: `Máximo en USD: ${maxUsd}` });
+            }
+        }
+    }
+
+    let newUsd = parseFloat(user.usd);
+    let newBonus = parseFloat(user.bonus_cup);
+    let newCup = parseFloat(user.cup);
+
+    if (totalUSD > 0) {
+        const totalDisponible = newUsd + newBonus / (await getExchangeRateUSD());
+        if (totalDisponible < totalUSD) {
+            return res.status(400).json({ error: 'Saldo USD insuficiente' });
+        }
+        const bonoEnUSD = newBonus / (await getExchangeRateUSD());
+        const usarBonoUSD = Math.min(bonoEnUSD, totalUSD);
+        newBonus -= usarBonoUSD * (await getExchangeRateUSD());
+        newUsd -= (totalUSD - usarBonoUSD);
+    }
+
+    if (totalCUP > 0) {
+        if (newCup < totalCUP) {
+            return res.status(400).json({ error: 'Saldo CUP insuficiente' });
+        }
+        newCup -= totalCUP;
+    }
+
+    await supabase
+        .from('users')
+        .update({
+            usd: newUsd,
+            bonus_cup: newBonus,
+            cup: newCup,
+            updated_at: new Date()
+        })
+        .eq('telegram_id', userId);
+
+    const { data: bet, error: betError } = await supabase
+        .from('bets')
+        .insert({
+            user_id: parseInt(userId),
+            lottery,
+            session_id: sessionId || null,
+            bet_type: betType,
+            raw_text: rawText,
+            items: parsed.items,
+            placed_at: new Date()
+        })
+        .select()
+        .single();
+
+    if (betError) {
+        console.error('Error insertando apuesta:', betError);
+        return res.status(500).json({ error: 'Error al registrar la apuesta' });
+    }
+
+    const updatedUser = await getOrCreateUser(parseInt(userId));
+    res.json({ success: true, bet, updatedUser });
 });
 
-bot.action('adm_edit_wit', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const { data: methods } = await supabase.from('withdraw_methods').select('*').order('id');
-    if (!methods || methods.length === 0) {
-        await ctx.answerCbQuery('No hay métodos de retiro para editar.', { show_alert: true });
-        return;
+// --- Cancelar jugada ---
+app.post('/api/bets/:id/cancel', async (req, res) => {
+    const { id } = req.params;
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'Falta userId' });
+
+    const { data: bet } = await supabase
+        .from('bets')
+        .select('*')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+
+    if (!bet) return res.status(404).json({ error: 'Jugada no encontrada' });
+
+    if (bet.session_id) {
+        const { data: session } = await supabase
+            .from('lottery_sessions')
+            .select('status')
+            .eq('id', bet.session_id)
+            .single();
+        if (!session || session.status !== 'open') {
+            return res.status(400).json({ error: 'No se puede cancelar: sesión cerrada' });
+        }
     }
-    const buttons = methods.map(m => [Markup.button.callback(`${m.name} (${m.currency})`, `edit_wit_${m.id}`)]);
-    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('✏️ <b>Editar método de RETIRO</b>\nSelecciona el método que deseas modificar:', Markup.inlineKeyboard(buttons));
-    await ctx.answerCbQuery();
+
+    const user = await getOrCreateUser(parseInt(userId));
+    let newCup = parseFloat(user.cup);
+    let newUsd = parseFloat(user.usd);
+    let newBonus = parseFloat(user.bonus_cup);
+
+    for (const item of bet.items) {
+        if (item.currency === 'CUP') {
+            newCup += item.amount;
+        } else if (item.currency === 'USD') {
+            newUsd += item.amount; // Simplificación: no se recupera bono
+        }
+    }
+
+    await supabase
+        .from('users')
+        .update({ usd: newUsd, cup: newCup, bonus_cup: newBonus, updated_at: new Date() })
+        .eq('telegram_id', userId);
+
+    await supabase
+        .from('bets')
+        .delete()
+        .eq('id', id);
+
+    const updatedUser = await getOrCreateUser(parseInt(userId));
+    res.json({ success: true, updatedUser });
 });
 
-// ========== ADMIN: ELIMINAR MÉTODOS ==========
-bot.action('adm_delete_dep', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const { data: methods } = await supabase.from('deposit_methods').select('*').order('id');
-    if (!methods || methods.length === 0) {
-        await ctx.answerCbQuery('No hay métodos de depósito para eliminar.', { show_alert: true });
-        return;
-    }
-    const buttons = methods.map(m => [Markup.button.callback(`${m.name} (${m.currency})`, `delete_dep_${m.id}`)]);
-    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('🗑 <b>Eliminar método de DEPÓSITO</b>\nSelecciona el método que deseas eliminar:', Markup.inlineKeyboard(buttons));
-    await ctx.answerCbQuery();
+// --- Historial de apuestas ---
+app.get('/api/user/:userId/bets', async (req, res) => {
+    const { userId } = req.params;
+    const limit = parseInt(req.query.limit) || 20;
+    const { data } = await supabase
+        .from('bets')
+        .select('*')
+        .eq('user_id', userId)
+        .order('placed_at', { ascending: false })
+        .limit(limit);
+    res.json(data || []);
 });
 
-bot.action('adm_delete_wit', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const { data: methods } = await supabase.from('withdraw_methods').select('*').order('id');
-    if (!methods || methods.length === 0) {
-        await ctx.answerCbQuery('No hay métodos de retiro para eliminar.', { show_alert: true });
-        return;
-    }
-    const buttons = methods.map(m => [Markup.button.callback(`${m.name} (${m.currency})`, `delete_wit_${m.id}`)]);
-    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('🗑 <b>Eliminar método de RETIRO</b>\nSelecciona el método que deseas eliminar:', Markup.inlineKeyboard(buttons));
-    await ctx.answerCbQuery();
+// --- Cantidad de referidos ---
+app.get('/api/user/:userId/referrals/count', async (req, res) => {
+    const { userId } = req.params;
+    const { count } = await supabase
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('ref_by', userId);
+    res.json({ count: count || 0 });
 });
 
-// ========== ADMIN: SELECCIÓN PARA EDITAR ==========
-bot.action(/edit_dep_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const methodId = parseInt(ctx.match[1]);
-    const { data: method } = await supabase.from('deposit_methods').select('*').eq('id', methodId).single();
-    if (!method) {
-        await ctx.answerCbQuery('Método no encontrado.', { show_alert: true });
-        return;
-    }
-    ctx.session.editMethodId = methodId;
-    ctx.session.editMethodType = 'deposit';
-    ctx.session.adminAction = 'edit_method';
-    ctx.session.editStep = 'choose_field';
+// ========== ENDPOINTS DE ADMIN ==========
 
-    const buttons = [
-        [Markup.button.callback('✏️ Nombre', 'edit_field_name')],
-        [Markup.button.callback('✏️ Moneda', 'edit_field_currency')],
-        [Markup.button.callback('✏️ Datos (card)', 'edit_field_card')],
-        [Markup.button.callback('✏️ Confirmar', 'edit_field_confirm')],
-        [Markup.button.callback('◀ Cancelar', 'admin_panel')]
-    ];
-    await ctx.reply(
-        `✏️ Editando método <b>${escapeHTML(method.name)}</b> (ID: ${methodId})\n\n` +
-        `Valores actuales:\n` +
-        `📛 Nombre: ${escapeHTML(method.name)}\n` +
-        `💱 Moneda: ${method.currency}\n` +
-        `💳 Datos: ${escapeHTML(method.card)}\n` +
-        `✅ Confirmar: ${escapeHTML(method.confirm)}\n\n` +
-        `¿Qué campo deseas modificar?`,
-        Markup.inlineKeyboard(buttons)
+// --- Añadir método de depósito ---
+app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
+    const { name, card, confirm, currency, min_amount, max_amount } = req.body;
+    if (!name || !card || !confirm || !currency) {
+        return res.status(400).json({ error: 'Faltan campos obligatorios' });
+    }
+    const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+    if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({ error: 'Moneda no válida' });
+    }
+    const insertData = {
+        name,
+        card,
+        confirm,
+        currency,
+        min_amount: min_amount !== undefined ? (min_amount === 0 ? null : min_amount) : null,
+        max_amount: max_amount !== undefined ? (max_amount === 0 ? null : max_amount) : null
+    };
+    const { data, error } = await supabase
+        .from('deposit_methods')
+        .insert(insertData)
+        .select()
+        .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// --- Editar método de depósito ---
+app.put('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { name, card, confirm, currency, min_amount, max_amount } = req.body;
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (card !== undefined) updateData.card = card;
+    if (confirm !== undefined) updateData.confirm = confirm;
+    if (currency !== undefined) {
+        const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+        if (!validCurrencies.includes(currency)) return res.status(400).json({ error: 'Moneda no válida' });
+        updateData.currency = currency;
+    }
+    if (min_amount !== undefined) updateData.min_amount = min_amount === 0 ? null : min_amount;
+    if (max_amount !== undefined) updateData.max_amount = max_amount === 0 ? null : max_amount;
+    updateData.updated_at = new Date();
+
+    const { data, error } = await supabase
+        .from('deposit_methods')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// --- Eliminar método de depósito ---
+app.delete('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { error } = await supabase
+        .from('deposit_methods')
+        .delete()
+        .eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
+// --- Añadir método de retiro ---
+app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
+    const { name, card, confirm, currency, min_amount, max_amount } = req.body;
+    if (!name || !card || !currency) {
+        return res.status(400).json({ error: 'Nombre, instrucción y moneda obligatorios' });
+    }
+    const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+    if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({ error: 'Moneda no válida' });
+    }
+    const insertData = {
+        name,
+        card,
+        confirm: confirm || 'ninguno',
+        currency,
+        min_amount: min_amount !== undefined ? (min_amount === 0 ? null : min_amount) : null,
+        max_amount: max_amount !== undefined ? (max_amount === 0 ? null : max_amount) : null
+    };
+    const { data, error } = await supabase
+        .from('withdraw_methods')
+        .insert(insertData)
+        .select()
+        .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// --- Editar método de retiro ---
+app.put('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { name, card, confirm, currency, min_amount, max_amount } = req.body;
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (card !== undefined) updateData.card = card;
+    if (confirm !== undefined) updateData.confirm = confirm;
+    if (currency !== undefined) {
+        const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+        if (!validCurrencies.includes(currency)) return res.status(400).json({ error: 'Moneda no válida' });
+        updateData.currency = currency;
+    }
+    if (min_amount !== undefined) updateData.min_amount = min_amount === 0 ? null : min_amount;
+    if (max_amount !== undefined) updateData.max_amount = max_amount === 0 ? null : max_amount;
+    updateData.updated_at = new Date();
+
+    const { data, error } = await supabase
+        .from('withdraw_methods')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+    if (error) return res.status(500).json({ error: error.message });
+    res.json(data);
+});
+
+// --- Eliminar método de retiro ---
+app.delete('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { error } = await supabase
+        .from('withdraw_methods')
+        .delete()
+        .eq('id', id);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
+// --- Actualizar tasas de cambio ---
+app.put('/api/admin/exchange-rate/usd', requireAdmin, async (req, res) => {
+    const { rate } = req.body;
+    if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
+    await setExchangeRateUSD(rate);
+    res.json({ success: true });
+});
+
+app.put('/api/admin/exchange-rate/usdt', requireAdmin, async (req, res) => {
+    const { rate } = req.body;
+    if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
+    await setExchangeRateUSDT(rate);
+    res.json({ success: true });
+});
+
+app.put('/api/admin/exchange-rate/trx', requireAdmin, async (req, res) => {
+    const { rate } = req.body;
+    if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
+    await setExchangeRateTRX(rate);
+    res.json({ success: true });
+});
+
+// --- Actualizar precios de jugada ---
+app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
+    const { betType } = req.params;
+    const { payout_multiplier, min_cup, min_usd, max_cup, max_usd } = req.body;
+    const updateData = { updated_at: new Date() };
+    if (payout_multiplier !== undefined) updateData.payout_multiplier = payout_multiplier;
+    if (min_cup !== undefined) updateData.min_cup = min_cup;
+    if (min_usd !== undefined) updateData.min_usd = min_usd;
+    if (max_cup !== undefined) updateData.max_cup = max_cup === 0 ? null : max_cup;
+    if (max_usd !== undefined) updateData.max_usd = max_usd === 0 ? null : max_usd;
+
+    const { error } = await supabase
+        .from('play_prices')
+        .update(updateData)
+        .eq('bet_type', betType);
+    if (error) return res.status(500).json({ error: error.message });
+    res.json({ success: true });
+});
+
+// --- Configurar mínimo depósito ---
+app.post('/api/admin/min-deposit', requireAdmin, async (req, res) => {
+    const { value } = req.body;
+    if (!value || value <= 0) return res.status(400).json({ error: 'Valor inválido' });
+    await setMinDepositUSD(value);
+    res.json({ success: true });
+});
+
+// --- Configurar mínimo retiro ---
+app.post('/api/admin/min-withdraw', requireAdmin, async (req, res) => {
+    const { value } = req.body;
+    if (!value || value <= 0) return res.status(400).json({ error: 'Valor inválido' });
+    await setMinWithdrawUSD(value);
+    res.json({ success: true });
+});
+
+// --- Obtener sesiones de una fecha ---
+app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
+    const { date } = req.query;
+    if (!date) return res.status(400).json({ error: 'Falta fecha' });
+    const { data } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('date', date);
+    res.json(data || []);
+});
+
+// --- Crear nueva sesión ---
+app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
+    const { lottery, time_slot } = req.body;
+    if (!lottery || !time_slot) return res.status(400).json({ error: 'Faltan datos' });
+
+    const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
+    const endTime = getEndTimeFromSlot(lottery, time_slot);
+    if (!endTime) {
+        return res.status(400).json({ error: `La hora de cierre para el turno ${time_slot} ya pasó hoy.` });
+    }
+
+    const { data: existing } = await supabase
+        .from('lottery_sessions')
+        .select('id')
+        .eq('lottery', lottery)
+        .eq('date', today)
+        .eq('time_slot', time_slot)
+        .maybeSingle();
+
+    if (existing) {
+        return res.status(400).json({ error: 'Ya existe una sesión para este turno hoy' });
+    }
+
+    const { data, error } = await supabase
+        .from('lottery_sessions')
+        .insert({
+            lottery,
+            date: today,
+            time_slot,
+            status: 'open',
+            end_time: endTime.toISOString()
+        })
+        .select()
+        .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const region = regionMap[lottery];
+    await broadcastToAllUsers(
+        `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
+        `✨ La región ${region?.emoji || '🎰'} <b>${lottery}</b> acaba de abrir su turno de <b>${time_slot}</b>.\n` +
+        `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
+        `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
+        `🍀 ¡La suerte te espera!`
     );
-    await ctx.answerCbQuery();
+
+    res.json(data);
 });
 
-bot.action(/edit_wit_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const methodId = parseInt(ctx.match[1]);
-    const { data: method } = await supabase.from('withdraw_methods').select('*').eq('id', methodId).single();
-    if (!method) {
-        await ctx.answerCbQuery('Método no encontrado.', { show_alert: true });
-        return;
+// --- Cambiar estado de sesión ---
+app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) => {
+    const { sessionId, status } = req.body;
+    if (!sessionId || !status) return res.status(400).json({ error: 'Faltan datos' });
+    if (!['open', 'closed'].includes(status)) return res.status(400).json({ error: 'Estado inválido' });
+
+    const { data, error } = await supabase
+        .from('lottery_sessions')
+        .update({ status, updated_at: new Date() })
+        .eq('id', sessionId)
+        .select()
+        .single();
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const region = regionMap[data.lottery];
+    if (status === 'closed') {
+        await broadcastToAllUsers(
+            `🔴 <b>SESIÓN CERRADA</b>\n\n` +
+            `🎰 ${region?.emoji || '🎰'} <b>${data.lottery}</b> - Turno <b>${data.time_slot}</b>\n` +
+            `📅 Fecha: ${data.date}\n\n` +
+            `❌ Ya no se reciben más apuestas.\n` +
+            `🔢 Pronto anunciaremos el número ganador. ¡Mantente atento!`
+        );
     }
-    ctx.session.editMethodId = methodId;
-    ctx.session.editMethodType = 'withdraw';
-    ctx.session.adminAction = 'edit_method';
-    ctx.session.editStep = 'choose_field';
 
-    const buttons = [
-        [Markup.button.callback('✏️ Nombre', 'edit_field_name')],
-        [Markup.button.callback('✏️ Moneda', 'edit_field_currency')],
-        [Markup.button.callback('✏️ Datos (card)', 'edit_field_card')],
-        [Markup.button.callback('✏️ Confirmar', 'edit_field_confirm')],
-        [Markup.button.callback('◀ Cancelar', 'admin_panel')]
-    ];
-    await ctx.reply(
-        `✏️ Editando método <b>${escapeHTML(method.name)}</b> (ID: ${methodId})\n\n` +
-        `Valores actuales:\n` +
-        `📛 Nombre: ${escapeHTML(method.name)}\n` +
-        `💱 Moneda: ${method.currency}\n` +
-        `💳 Datos: ${escapeHTML(method.card)}\n` +
-        `✅ Confirmar: ${escapeHTML(method.confirm)}\n\n` +
-        `¿Qué campo deseas modificar?`,
-        Markup.inlineKeyboard(buttons)
-    );
-    await ctx.answerCbQuery();
+    res.json(data);
 });
 
-// ========== ADMIN: SELECCIÓN DE CAMPO A EDITAR ==========
-bot.action('edit_field_name', async (ctx) => {
-    ctx.session.editField = 'name';
-    ctx.session.adminAction = 'edit_method';
-    ctx.session.editStep = 'awaiting_value';
-    await ctx.reply('✏️ Envía el <b>nuevo nombre</b> del método:');
-    await ctx.answerCbQuery();
-});
-
-bot.action('edit_field_currency', async (ctx) => {
-    ctx.session.editField = 'currency';
-    ctx.session.adminAction = 'edit_method';
-    ctx.session.editStep = 'awaiting_value';
-    await ctx.reply('✏️ Envía la <b>nueva moneda</b> (CUP, USD, USDT, TRX, MLC):');
-    await ctx.answerCbQuery();
-});
-
-bot.action('edit_field_card', async (ctx) => {
-    ctx.session.editField = 'card';
-    ctx.session.adminAction = 'edit_method';
-    ctx.session.editStep = 'awaiting_value';
-    await ctx.reply('✏️ Envía el <b>nuevo dato</b> (número de cuenta, dirección wallet, etc.):');
-    await ctx.answerCbQuery();
-});
-
-bot.action('edit_field_confirm', async (ctx) => {
-    ctx.session.editField = 'confirm';
-    ctx.session.adminAction = 'edit_method';
-    ctx.session.editStep = 'awaiting_value';
-    await ctx.reply('✏️ Envía el <b>nuevo dato de confirmación</b> (red, teléfono, etc.):');
-    await ctx.answerCbQuery();
-});
-
-// ========== ADMIN: CONFIRMACIÓN PARA ELIMINAR ==========
-bot.action(/confirm_delete_dep_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const methodId = parseInt(ctx.match[1]);
-    const { error } = await supabase.from('deposit_methods').delete().eq('id', methodId);
-    if (error) {
-        await ctx.reply(`❌ Error al eliminar: ${error.message}`);
-    } else {
-        await ctx.reply('✅ Método de DEPÓSITO eliminado correctamente.');
-    }
-    await ctx.answerCbQuery();
-    await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-});
-
-bot.action(/confirm_delete_wit_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const methodId = parseInt(ctx.match[1]);
-    const { error } = await supabase.from('withdraw_methods').delete().eq('id', methodId);
-    if (error) {
-        await ctx.reply(`❌ Error al eliminar: ${error.message}`);
-    } else {
-        await ctx.reply('✅ Método de RETIRO eliminado correctamente.');
-    }
-    await ctx.answerCbQuery();
-    await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-});
-
-// ========== ADMIN: CONFIGURAR TASAS ==========
-bot.action('adm_set_rate_usd', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const rate = await getExchangeRateUSD();
-    ctx.session.adminAction = 'set_rate_usd';
-    await ctx.reply(`💰 <b>Tasa USD/CUP actual:</b> 1 USD = ${rate} CUP\n\nEnvía la nueva tasa (solo número, ej: 120):`, { parse_mode: 'HTML' });
-    await ctx.answerCbQuery();
-});
-
-bot.action('adm_set_rate_usdt', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const rate = await getExchangeRateUSDT();
-    ctx.session.adminAction = 'set_rate_usdt';
-    await ctx.reply(`💰 <b>Tasa USDT/CUP actual:</b> 1 USDT = ${rate} CUP\n\nEnvía la nueva tasa (solo número, ej: 110):`, { parse_mode: 'HTML' });
-    await ctx.answerCbQuery();
-});
-
-bot.action('adm_set_rate_trx', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const rate = await getExchangeRateTRX();
-    ctx.session.adminAction = 'set_rate_trx';
-    await ctx.reply(`💰 <b>Tasa TRX/CUP actual:</b> 1 TRX = ${rate} CUP\n\nEnvía la nueva tasa (solo número, ej: 1.5):`, { parse_mode: 'HTML' });
-    await ctx.answerCbQuery();
-});
-
-// ========== ADMIN: MÍNIMOS ==========
-bot.action('adm_min_deposit', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const current = await getMinDepositUSD();
-    ctx.session.adminAction = 'set_min_deposit';
-    await ctx.reply(`💰 <b>Mínimo de depósito actual:</b> ${current} USD (equivale a ${(current * await getExchangeRateUSD()).toFixed(2)} CUP)\n\nEnvía el nuevo mínimo en USD (solo número, ej: 5):`, { parse_mode: 'HTML' });
-    await ctx.answerCbQuery();
-});
-
-bot.action('adm_min_withdraw', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const current = await getMinWithdrawUSD();
-    const rate = await getExchangeRateUSD();
-    ctx.session.adminAction = 'set_min_withdraw';
-    await ctx.reply(`💰 <b>Mínimo de retiro actual:</b> ${current} USD (equivale a ${(current * rate).toFixed(2)} CUP)\n\nEnvía el nuevo mínimo en USD (solo número, ej: 2):`, { parse_mode: 'HTML' });
-    await ctx.answerCbQuery();
-});
-
-// ========== ADMIN: PRECIOS DE JUGADAS ==========
-bot.action('adm_set_prices', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const { data: prices } = await supabase.from('play_prices').select('*');
-    const buttons = prices.map(p => [Markup.button.callback(p.bet_type, `set_price_${p.bet_type}`)]);
-    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('🎲 <b>Configurar precios y pagos</b>\nElige el tipo de jugada que deseas modificar:', Markup.inlineKeyboard(buttons));
-    await ctx.answerCbQuery();
-});
-
-bot.action(/set_price_(.+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const betType = ctx.match[1];
-    ctx.session.adminAction = 'set_price';
-    ctx.session.betType = betType;
-    ctx.session.priceStep = 1;
-    await ctx.reply(
-        `⚙️ Configurando precios para <b>${betType}</b> (valores globales para todas las regiones)\n\n` +
-        `Paso 1/3: Ingresa el costo en formato <b>cup/usd</b>\n` +
-        `Ejemplo: <code>70/0.20</code>  (70 CUP y 0.20 USD)`,
-        { parse_mode: 'HTML' }
-    );
-    await ctx.answerCbQuery();
-});
-
-bot.action('adm_min_per_bet', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const { data: prices } = await supabase.from('play_prices').select('*');
-    const buttons = prices.map(p => [Markup.button.callback(p.bet_type, `set_min_${p.bet_type}`)]);
-    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-    await ctx.reply('💰 <b>Configurar montos mínimos por jugada</b>\nElige el tipo de jugada:', Markup.inlineKeyboard(buttons));
-    await ctx.answerCbQuery();
-});
-
-bot.action(/set_min_(.+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const betType = ctx.match[1];
-    ctx.session.adminAction = 'set_min';
-    ctx.session.betType = betType;
-    ctx.session.minStep = 1;
-    await ctx.reply(
-        `⚙️ Configurando mínimos para <b>${betType}</b>\n\n` +
-        `Paso 1/2: Ingresa el <b>monto mínimo en CUP</b> (0 = sin mínimo):`,
-        { parse_mode: 'HTML' }
-    );
-    await ctx.answerCbQuery();
-});
-
-// ========== ADMIN: VER DATOS ==========
-bot.action('adm_view', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const rateUSD = await getExchangeRateUSD();
-    const rateUSDT = await getExchangeRateUSDT();
-    const rateTRX = await getExchangeRateTRX();
-    const minDep = await getMinDepositUSD();
-    const minWit = await getMinWithdrawUSD();
-    const { data: depMethods } = await supabase.from('deposit_methods').select('*');
-    const { data: witMethods } = await supabase.from('withdraw_methods').select('*');
-    const { data: prices } = await supabase.from('play_prices').select('*');
-
-    let text = `💰 <b>Tasas de cambio:</b>\n`;
-    text += `USD/CUP: 1 USD = ${rateUSD} CUP\n`;
-    text += `USDT/CUP: 1 USDT = ${rateUSDT} CUP\n`;
-    text += `TRX/CUP: 1 TRX = ${rateTRX} CUP\n\n`;
-    text += `📥 <b>Mínimo depósito:</b> ${minDep} USD (${(minDep * rateUSD).toFixed(2)} CUP)\n`;
-    text += `📤 <b>Mínimo retiro:</b> ${minWit} USD (${(minWit * rateUSD).toFixed(2)} CUP)\n\n`;
-    text += `📥 <b>Métodos de DEPÓSITO:</b>\n`;
-    depMethods?.forEach(m => text += `  ID ${m.id}: ${escapeHTML(m.name)} (${m.currency}) - ${escapeHTML(m.card)} / ${escapeHTML(m.confirm)}\n`);
-    text += `\n📤 <b>Métodos de RETIRO:</b>\n`;
-    witMethods?.forEach(m => text += `  ID ${m.id}: ${escapeHTML(m.name)} (${m.currency}) - ${escapeHTML(m.card)} / ${escapeHTML(m.confirm)}\n`);
-    text += `\n🎲 <b>Precios por jugada (globales):</b>\n`;
-    prices?.forEach(p => text += `  ${p.bet_type}: ${p.amount_cup} CUP / ${p.amount_usd} USD  (paga x${p.payout_multiplier || 0})  (mín: ${p.min_cup||0} CUP / ${p.min_usd||0} USD)\n`);
-
-    await safeEdit(ctx, text, Markup.inlineKeyboard([[Markup.button.callback('◀ Volver a Admin', 'admin_panel')]]));
-});
-
-// ========== ADMIN: PUBLICAR GANADORES ==========
-bot.action('admin_winning', async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-
-    const { data: closedSessions } = await supabase
+// --- Obtener sesiones cerradas ---
+app.get('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) => {
+    const { data } = await supabase
         .from('lottery_sessions')
         .select('*')
         .eq('status', 'closed')
         .order('date', { ascending: false });
-
-    const { data: published } = await supabase
-        .from('winning_numbers')
-        .select('lottery, date, time_slot');
-
-    const publishedSet = new Set(published?.map(p => `${p.lottery}|${p.date}|${p.time_slot}`) || []);
-
-    const availableSessions = closedSessions.filter(s =>
-        !publishedSet.has(`${s.lottery}|${s.date}|${s.time_slot}`)
-    );
-
-    if (availableSessions.length === 0) {
-        await ctx.reply('🔢 No hay sesiones cerradas pendientes de publicar. Todas las sesiones tienen números ganadores registrados.');
-        return;
-    }
-
-    const buttons = availableSessions.map(s => {
-        const region = regionMap[s.lottery];
-        return [Markup.button.callback(
-            `${region?.emoji || '🎰'} ${s.lottery} - ${s.date} (${s.time_slot})`,
-            `publish_win_${s.id}`
-        )];
-    });
-    buttons.push([Markup.button.callback('◀ Cancelar', 'admin_panel')]);
-
-    await ctx.reply('🔢 <b>Publicar números ganadores</b>\nSelecciona la sesión para la cual deseas ingresar el número ganador:', Markup.inlineKeyboard(buttons));
-    await ctx.answerCbQuery();
+    res.json(data || []);
 });
 
-bot.action(/publish_win_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    const sessionId = parseInt(ctx.match[1]);
-    ctx.session.winningSessionId = sessionId;
-    ctx.session.adminAction = 'winning_numbers';
-    await ctx.reply(
-        '✍️ <b>Ingresa el número ganador de 7 DÍGITOS</b>\n' +
-        'Formato: centena (3) + cuarteta (4). Ejemplo: <code>5173262</code> o <code>517 3262</code>\n\n' +
-        'Se desglosará automáticamente en:\n' +
-        '• Centena: primeros 3 dígitos\n' +
-        '• Fijo: últimos 2 de la centena\n' +
-        '• Corridos: fijo, primeros 2 de cuarteta, últimos 2 de cuarteta\n' +
-        '• Parles: combinaciones de los corridos',
-        { parse_mode: 'HTML' }
-    );
-    await ctx.answerCbQuery();
-});
-
-// ========== FUNCIÓN AUXILIAR PARA FORMATEAR NÚMERO GANADOR ==========
-function formatWinningNumber(num) {
-    if (!num || num.length !== 7) return num;
-    return num.slice(0, 3) + ' ' + num.slice(3);
-}
-
-async function processWinningNumber(sessionId, winningStr, ctx) {
-    winningStr = winningStr.replace(/\s+/g, '');
-    if (!/^\d{7}$/.test(winningStr)) {
-        await ctx.reply('❌ El número debe tener EXACTAMENTE 7 dígitos. Por favor, inténtalo de nuevo.');
-        return false;
-    }
+// --- Obtener ganadores de una sesión ---
+app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (req, res) => {
+    const { sessionId } = req.params;
 
     const { data: session } = await supabase
         .from('lottery_sessions')
@@ -1614,24 +1224,21 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         .eq('id', sessionId)
         .single();
 
-    if (!session) {
-        await ctx.reply('❌ Sesión no encontrada. Verifica el ID.');
-        return false;
-    }
+    if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
 
-    const { data: existingWin } = await supabase
+    const { data: winning } = await supabase
         .from('winning_numbers')
-        .select('id')
+        .select('numbers')
         .eq('lottery', session.lottery)
         .eq('date', session.date)
         .eq('time_slot', session.time_slot)
         .maybeSingle();
 
-    if (existingWin) {
-        await ctx.reply('❌ Esta sesión ya tiene un número ganador publicado. No se puede sobrescribir.');
-        return false;
+    if (!winning) {
+        return res.json({ winners: [], message: 'Aún no hay número ganador' });
     }
 
+    const winningStr = winning.numbers[0];
     const centena = winningStr.slice(0, 3);
     const cuarteta = winningStr.slice(3);
     const fijo = centena.slice(1);
@@ -1646,25 +1253,9 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         `${corridos[1]}x${corridos[2]}`
     ];
 
-    const { error: insertError } = await supabase
-        .from('winning_numbers')
-        .insert({
-            lottery: session.lottery,
-            date: session.date,
-            time_slot: session.time_slot,
-            numbers: [winningStr],
-            published_at: new Date()
-        });
-
-    if (insertError) {
-        await ctx.reply(`❌ Error al guardar: ${insertError.message}`);
-        return false;
-    }
-
     const { data: multipliers } = await supabase
         .from('play_prices')
         .select('bet_type, payout_multiplier');
-
     const multiplierMap = {};
     multipliers.forEach(m => { multiplierMap[m.bet_type] = parseFloat(m.payout_multiplier) || 0; });
 
@@ -1673,18 +1264,10 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
         .select('*')
         .eq('session_id', sessionId);
 
-    const rateUSD = await getExchangeRateUSD();
-    const rateUSDT = await getExchangeRateUSDT();
-    const rateTRX = await getExchangeRateTRX();
-    const formattedWinning = formatWinningNumber(winningStr);
+    const winners = [];
 
     for (const bet of bets || []) {
-        const { data: userBefore } = await supabase
-            .from('users')
-            .select('cup, usd, usdt, trx, mlc, bonus_cup')
-            .eq('telegram_id', bet.user_id)
-            .single();
-
+        let premioTotalUSD = 0;
         let premioTotalCUP = 0;
         const items = bet.items || [];
 
@@ -1717,1266 +1300,220 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
             }
 
             if (ganado) {
-                // Convertir el monto de la apuesta a CUP según su moneda
-                let montoCUP = 0;
-                switch (item.currency) {
-                    case 'CUP': montoCUP = item.amount; break;
-                    case 'USD': montoCUP = item.amount * rateUSD; break;
-                    case 'USDT': montoCUP = item.amount * rateUSDT; break;
-                    case 'TRX': montoCUP = item.amount * rateTRX; break;
-                    case 'MLC': montoCUP = item.amount * rateUSD; break;
-                }
-                premioTotalCUP += montoCUP * multiplicador;
+                if (item.currency === 'USD') premioTotalUSD += item.amount * multiplicador;
+                else if (item.currency === 'CUP') premioTotalCUP += item.amount * multiplicador;
             }
         }
 
-        if (premioTotalCUP > 0) {
-            // Acreditar en CUP (principal) por simplicidad
-            let newCup = parseFloat(userBefore.cup) + premioTotalCUP;
+        if (premioTotalUSD > 0 || premioTotalCUP > 0) {
+            const { data: user } = await supabase
+                .from('users')
+                .select('first_name')
+                .eq('telegram_id', bet.user_id)
+                .single();
+
+            winners.push({
+                user_id: bet.user_id,
+                first_name: user?.first_name || 'Usuario',
+                prize_usd: premioTotalUSD,
+                prize_cup: premioTotalCUP,
+                bet_text: bet.raw_text
+            });
+        }
+    }
+
+    res.json({ winners, winning_number: winningStr });
+});
+
+// --- Publicar número ganador ---
+app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
+    const { sessionId, winningNumber } = req.body;
+    if (!sessionId || !winningNumber) return res.status(400).json({ error: 'Faltan datos' });
+
+    const cleanNumber = winningNumber.replace(/\s+/g, '');
+    if (!/^\d{7}$/.test(cleanNumber)) {
+        return res.status(400).json({ error: 'El número debe tener exactamente 7 dígitos' });
+    }
+
+    const { data: session } = await supabase
+        .from('lottery_sessions')
+        .select('*')
+        .eq('id', sessionId)
+        .single();
+
+    if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
+
+    const { data: existingWin } = await supabase
+        .from('winning_numbers')
+        .select('id')
+        .eq('lottery', session.lottery)
+        .eq('date', session.date)
+        .eq('time_slot', session.time_slot)
+        .maybeSingle();
+
+    if (existingWin) {
+        return res.status(400).json({ error: 'Esta sesión ya tiene un número ganador publicado' });
+    }
+
+    const centena = cleanNumber.slice(0, 3);
+    const cuarteta = cleanNumber.slice(3);
+    const fijo = centena.slice(1);
+    const corridos = [
+        fijo,
+        cuarteta.slice(0, 2),
+        cuarteta.slice(2)
+    ];
+    const parles = [
+        `${corridos[0]}x${corridos[1]}`,
+        `${corridos[0]}x${corridos[2]}`,
+        `${corridos[1]}x${corridos[2]}`
+    ];
+
+    const { error: insertError } = await supabase
+        .from('winning_numbers')
+        .insert({
+            lottery: session.lottery,
+            date: session.date,
+            time_slot: session.time_slot,
+            numbers: [cleanNumber],
+            published_at: new Date()
+        });
+
+    if (insertError) return res.status(500).json({ error: insertError.message });
+
+    const { data: multipliers } = await supabase
+        .from('play_prices')
+        .select('bet_type, payout_multiplier');
+    const multiplierMap = {};
+    multipliers.forEach(m => { multiplierMap[m.bet_type] = parseFloat(m.payout_multiplier) || 0; });
+
+    const { data: bets } = await supabase
+        .from('bets')
+        .select('*')
+        .eq('session_id', sessionId);
+
+    const rates = await getExchangeRates();
+
+    for (const bet of bets || []) {
+        let premioTotalUSD = 0;
+        let premioTotalCUP = 0;
+        const items = bet.items || [];
+
+        for (const item of items) {
+            const numero = item.numero;
+            const multiplicador = multiplierMap[bet.bet_type] || 0;
+            let ganado = false;
+
+            switch (bet.bet_type) {
+                case 'fijo':
+                    if (numero.startsWith('D')) {
+                        const digito = numero[1];
+                        if (fijo.startsWith(digito)) ganado = true;
+                    } else if (numero.startsWith('T')) {
+                        const digito = numero[1];
+                        if (fijo.endsWith(digito)) ganado = true;
+                    } else {
+                        if (numero === fijo) ganado = true;
+                    }
+                    break;
+                case 'corridos':
+                    if (corridos.includes(numero)) ganado = true;
+                    break;
+                case 'centena':
+                    if (numero === centena) ganado = true;
+                    break;
+                case 'parle':
+                    if (parles.includes(numero)) ganado = true;
+                    break;
+            }
+
+            if (ganado) {
+                if (item.currency === 'USD') premioTotalUSD += item.amount * multiplicador;
+                else if (item.currency === 'CUP') premioTotalCUP += item.amount * multiplicador;
+            }
+        }
+
+        if (premioTotalUSD > 0 || premioTotalCUP > 0) {
+            const { data: user } = await supabase
+                .from('users')
+                .select('usd, cup')
+                .eq('telegram_id', bet.user_id)
+                .single();
+
+            let newUsd = parseFloat(user.usd) + premioTotalUSD;
+            let newCup = parseFloat(user.cup) + premioTotalCUP;
+
             await supabase
                 .from('users')
-                .update({ cup: newCup, updated_at: new Date() })
+                .update({ usd: newUsd, cup: newCup, updated_at: new Date() })
                 .eq('telegram_id', bet.user_id);
 
-            await bot.telegram.sendMessage(bet.user_id,
-                `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
-                `🔢 Número ganador: <code>${formattedWinning}</code>\n` +
-                `🎰 ${regionMap[session.lottery]?.emoji || '🎰'} ${escapeHTML(session.lottery)} - ${escapeHTML(session.time_slot)}\n` +
-                `💰 Premio: ${premioTotalCUP.toFixed(2)} CUP\n\n` +
-                `✅ El premio ya fue acreditado a tu saldo en CUP. ¡Sigue disfrutando!`,
-                { parse_mode: 'HTML' }
-            );
+            const formatted = cleanNumber.replace(/(\d{3})(\d{4})/, '$1 $2');
+            try {
+                await bot.telegram.sendMessage(bet.user_id,
+                    `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
+                    `🔢 Número ganador: <code>${formatted}</code>\n` +
+                    `🎰 ${regionMap[session.lottery]?.emoji || '🎰'} ${session.lottery} - ${session.time_slot}\n` +
+                    `💰 Premio: ${premioTotalUSD > 0 ? premioTotalUSD.toFixed(2) + ' USD' : ''} ${premioTotalCUP > 0 ? premioTotalCUP.toFixed(2) + ' CUP' : ''}\n` +
+                    `✅ El premio ya fue acreditado a tu saldo.`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
         } else {
-            await bot.telegram.sendMessage(bet.user_id,
-                `🔢 <b>Números ganadores de ${regionMap[session.lottery]?.emoji || '🎰'} ${escapeHTML(session.lottery)} (${session.date} - ${escapeHTML(session.time_slot)})</b>\n\n` +
-                `Número: <code>${formattedWinning}</code>\n\n` +
-                `😔 Esta vez no has ganado, pero no te desanimes. ¡Sigue intentando y la suerte llegará!\n\n` +
-                `🍀 ¡Mucha suerte en la próxima!`,
-                { parse_mode: 'HTML' }
-            );
+            const formatted = cleanNumber.replace(/(\d{3})(\d{4})/, '$1 $2');
+            try {
+                await bot.telegram.sendMessage(bet.user_id,
+                    `🔢 <b>Números ganadores de ${regionMap[session.lottery]?.emoji || '🎰'} ${session.lottery} (${session.date} - ${session.time_slot})</b>\n\n` +
+                    `Número: <code>${formatted}</code>\n\n` +
+                    `😔 No has ganado esta vez. ¡Sigue intentando!`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {}
         }
     }
 
+    const formattedBroadcast = cleanNumber.replace(/(\d{3})(\d{4})/, '$1 $2');
     await broadcastToAllUsers(
         `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
-        `🎰 ${regionMap[session.lottery]?.emoji || '🎰'} <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
+        `🎰 ${regionMap[session.lottery]?.emoji || '🎰'} <b>${session.lottery}</b> - Turno <b>${session.time_slot}</b>\n` +
         `📅 Fecha: ${session.date}\n` +
-        `🔢 Número: <code>${formattedWinning}</code>\n\n` +
-        `💬 Revisa tu historial para ver si has ganado. ¡Mucha suerte en las próximas jugadas!`
+        `🔢 Número: <code>${formattedBroadcast}</code>\n\n` +
+        `💬 Revisa tu historial para ver si has ganado. ¡Suerte en la próxima!`
     );
 
-    await ctx.reply(`✅ Números ganadores publicados y premios calculados correctamente.`);
-    return true;
-}
-
-// ========== MANEJADOR DE TEXTO ==========
-bot.on(message('text'), async (ctx) => {
-    const uid = ctx.from.id;
-    const text = ctx.message.text.trim();
-    const session = ctx.session;
-    const user = ctx.dbUser;
-
-    // Botones principales del teclado
-    const mainButtons = ['🎲 Jugar', '💰 Mi dinero', '📋 Mis jugadas', '👥 Referidos', '❓ Cómo jugar', '🌐 Abrir WebApp', '🔧 Admin'];
-    if (mainButtons.includes(text)) {
-        if (text === '🎲 Jugar') {
-            await safeEdit(ctx, '🎲 Por favor, selecciona una lotería para comenzar a jugar:', playLotteryKbd());
-            return;
-        } else if (text === '💰 Mi dinero') {
-            const user = ctx.dbUser;
-            const rateUSD = await getExchangeRateUSD();
-            const rateUSDT = await getExchangeRateUSDT();
-            const rateTRX = await getExchangeRateTRX();
-
-            const cup = parseFloat(user.cup);
-            const usd = parseFloat(user.usd);
-            const usdt = parseFloat(user.usdt);
-            const trx = parseFloat(user.trx);
-            const mlc = parseFloat(user.mlc);
-            const bonusCup = parseFloat(user.bonus_cup);
-
-            const text = `💰 <b>Tu saldo actual es:</b>\n\n` +
-                `🇨🇺 <b>CUP:</b> ${cup.toFixed(2)} (principal)\n` +
-                `💵 <b>USD:</b> ${usd.toFixed(2)} (≈ ${(usd * rateUSD).toFixed(2)} CUP)\n` +
-                `₮ <b>USDT:</b> ${usdt.toFixed(2)} (≈ ${(usdt * rateUSDT).toFixed(2)} CUP)\n` +
-                `🔷 <b>TRX:</b> ${trx.toFixed(2)} (≈ ${(trx * rateTRX).toFixed(2)} CUP)\n` +
-                `💳 <b>MLC:</b> ${mlc.toFixed(2)} (≈ ${(mlc * rateUSD).toFixed(2)} CUP)\n` +
-                `🎁 <b>Bono (no retirable):</b> ${bonusCup.toFixed(2)} CUP\n\n` +
-                `¿Qué deseas hacer?`;
-            await safeEdit(ctx, text, myMoneyKbd());
-            return;
-        } else if (text === '📋 Mis jugadas') {
-            const uid = ctx.from.id;
-            const { data: bets } = await supabase
-                .from('bets')
-                .select('*')
-                .eq('user_id', uid)
-                .order('placed_at', { ascending: false })
-                .limit(5);
-
-            if (!bets || bets.length === 0) {
-                await safeEdit(ctx,
-                    '📭 Aún no has realizado ninguna jugada. ¡Anímate a participar! 🎲\n\n' +
-                    'Selecciona "🎲 Jugar" en el menú para empezar.',
-                    getMainKeyboard(ctx)
-                );
-            } else {
-                let text = '📋 <b>Tus últimas 5 jugadas:</b>\n\n';
-                bets.forEach((b, i) => {
-                    const date = moment(b.placed_at).tz(TIMEZONE).format('DD/MM/YYYY HH:mm');
-                    text += `<b>${i + 1}.</b> 🎰 ${escapeHTML(b.lottery)} - ${escapeHTML(b.bet_type)}\n` +
-                        `   📝 <code>${escapeHTML(b.raw_text)}</code>\n` +
-                        `   💰 Costo: ${b.items.map(it => `${it.amount} ${it.currency}`).join(', ')}\n` +
-                        `   🕒 ${date}\n\n`;
-                });
-                text += '¿Quieres ver más? Puedes consultar el historial completo en la WebApp.';
-                await safeEdit(ctx, text, getMainKeyboard(ctx));
-            }
-            return;
-        } else if (text === '👥 Referidos') {
-            const uid = ctx.from.id;
-            const { count } = await supabase
-                .from('users')
-                .select('*', { count: 'exact', head: true })
-                .eq('ref_by', uid);
-
-            const botInfo = await ctx.telegram.getMe();
-            const link = `https://t.me/${botInfo.username}?start=${uid}`;
-
-            await safeEdit(ctx,
-                `💸 <b>¡GANA DINERO EXTRA INVITANDO AMIGOS! 💰</b>\n\n` +
-                `🎯 <b>¿Cómo funciona?</b>\n` +
-                `1️⃣ Comparte tu enlace personal con amigos\n` +
-                `2️⃣ Cuando se registren y jueguen, tú ganas una comisión\n` +
-                `3️⃣ Recibirás un porcentaje de CADA apuesta que realicen\n` +
-                `4️⃣ ¡Es automático y para siempre! 🔄\n\n` +
-                `🔥 Sin límites, sin topes, sin esfuerzo.\n\n` +
-                `📲 <b>Tu enlace mágico:</b> 👇\n` +
-                `<code>${escapeHTML(link)}</code>\n\n` +
-                `📊 <b>Tus estadísticas:</b>\n` +
-                `👥 Referidos registrados: ${count || 0}\n\n` +
-                `¡Comparte y empieza a ganar hoy mismo!`,
-                getMainKeyboard(ctx)
-            );
-            return;
-        } else if (text === '❓ Cómo jugar') {
-            await safeEdit(ctx,
-                '📩 <b>¿Necesitas ayuda?</b>\n\n' +
-                'Puedes escribirnos directamente en este chat. Nuestro equipo de soporte te responderá a la mayor brevedad.\n\n' +
-                'También puedes consultar la sección de preguntas frecuentes en nuestra WebApp.',
-                Markup.inlineKeyboard([[Markup.button.callback('◀ Volver al inicio', 'main')]])
-            );
-            return;
-        } else if (text === '🌐 Abrir WebApp') {
-            const webAppButton = Markup.inlineKeyboard([
-                Markup.button.webApp('🚀 Abrir WebApp', `${WEBAPP_URL}/app.html`)
-            ]);
-            await ctx.reply('Haz clic en el botón para acceder a nuestra plataforma web interactiva:', webAppButton);
-            return;
-        } else if (text === '🔧 Admin' && isAdmin(uid)) {
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>\nSelecciona una opción:', adminPanelKbd());
-            return;
-        }
-    }
-
-    // ========== ADMIN: FLUJO DE EDICIÓN ==========
-    if (isAdmin(uid) && session.adminAction === 'edit_method' && session.editStep === 'awaiting_value') {
-        const newValue = text;
-        const methodId = session.editMethodId;
-        const field = session.editField;
-        const type = session.editMethodType;
-        const table = type === 'deposit' ? 'deposit_methods' : 'withdraw_methods';
-
-        const updateData = {};
-        updateData[field] = newValue;
-
-        const { error } = await supabase.from(table).update(updateData).eq('id', methodId);
-        if (error) {
-            await ctx.reply(`❌ Error al actualizar: ${error.message}`);
-        } else {
-            await ctx.reply(`✅ Campo <b>${field}</b> actualizado correctamente.`, { parse_mode: 'HTML' });
-        }
-        delete session.adminAction;
-        delete session.editMethodId;
-        delete session.editMethodType;
-        delete session.editStep;
-        delete session.editField;
-        await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-        return;
-    }
-
-    // ========== ADMIN: FLUJOS DE AÑADIR MÉTODOS (con moneda) ==========
-    if (isAdmin(uid) && session.adminAction) {
-        if (session.adminAction === 'add_dep') {
-            if (session.adminStep === 1) {
-                session.adminTempName = text;
-                session.adminStep = 2;
-                await ctx.reply('Paso 2/4: Ahora envía la <b>moneda</b> del método (CUP, USD, USDT, TRX, MLC):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 2) {
-                const currency = text.toUpperCase();
-                if (!['CUP','USD','USDT','TRX','MLC'].includes(currency)) {
-                    await ctx.reply('❌ Moneda no válida. Debe ser CUP, USD, USDT, TRX o MLC.');
-                    return;
-                }
-                session.adminTempCurrency = currency;
-                session.adminStep = 3;
-                await ctx.reply('Paso 3/4: Ahora envía el <b>dato principal</b> (número de cuenta, dirección wallet, etc.):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 3) {
-                session.adminTempCard = text;
-                session.adminStep = 4;
-                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 4) {
-                const { data, error } = await supabase
-                    .from('deposit_methods')
-                    .insert({
-                        name: session.adminTempName,
-                        currency: session.adminTempCurrency,
-                        card: session.adminTempCard,
-                        confirm: text
-                    })
-                    .select()
-                    .single();
-                if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
-                else await ctx.reply(`✅ Método de depósito <b>${escapeHTML(session.adminTempName)}</b> (${session.adminTempCurrency}) añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
-                delete session.adminAction;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-                return;
-            }
-        }
-
-        if (session.adminAction === 'add_wit') {
-            if (session.adminStep === 1) {
-                session.adminTempName = text;
-                session.adminStep = 2;
-                await ctx.reply('Paso 2/4: Ahora envía la <b>moneda</b> del método (CUP, USD, USDT, TRX, MLC):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 2) {
-                const currency = text.toUpperCase();
-                if (!['CUP','USD','USDT','TRX','MLC'].includes(currency)) {
-                    await ctx.reply('❌ Moneda no válida. Debe ser CUP, USD, USDT, TRX o MLC.');
-                    return;
-                }
-                session.adminTempCurrency = currency;
-                session.adminStep = 3;
-                await ctx.reply('Paso 3/4: Ahora envía el <b>dato principal</b> (número de cuenta, dirección wallet, etc.):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 3) {
-                session.adminTempCard = text;
-                session.adminStep = 4;
-                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 4) {
-                const { data, error } = await supabase
-                    .from('withdraw_methods')
-                    .insert({
-                        name: session.adminTempName,
-                        currency: session.adminTempCurrency,
-                        card: session.adminTempCard,
-                        confirm: text
-                    })
-                    .select()
-                    .single();
-                if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
-                else await ctx.reply(`✅ Método de retiro <b>${escapeHTML(session.adminTempName)}</b> (${session.adminTempCurrency}) añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
-                delete session.adminAction;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-                return;
-            }
-        }
-
-        // Configurar tasas
-        if (session.adminAction === 'set_rate_usd') {
-            const rate = parseFloat(text.replace(',', '.'));
-            if (isNaN(rate) || rate <= 0) {
-                await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 120).');
-                return;
-            }
-            await setExchangeRateUSD(rate);
-            await ctx.reply(`✅ Tasa USD/CUP actualizada: 1 USD = ${rate} CUP`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-            return;
-        }
-
-        if (session.adminAction === 'set_rate_usdt') {
-            const rate = parseFloat(text.replace(',', '.'));
-            if (isNaN(rate) || rate <= 0) {
-                await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 110).');
-                return;
-            }
-            await setExchangeRateUSDT(rate);
-            await ctx.reply(`✅ Tasa USDT/CUP actualizada: 1 USDT = ${rate} CUP`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-            return;
-        }
-
-        if (session.adminAction === 'set_rate_trx') {
-            const rate = parseFloat(text.replace(',', '.'));
-            if (isNaN(rate) || rate <= 0) {
-                await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 1.5).');
-                return;
-            }
-            await setExchangeRateTRX(rate);
-            await ctx.reply(`✅ Tasa TRX/CUP actualizada: 1 TRX = ${rate} CUP`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-            return;
-        }
-
-        if (session.adminAction === 'set_min_deposit') {
-            const value = parseFloat(text.replace(',', '.'));
-            if (isNaN(value) || value <= 0) {
-                await ctx.reply('❌ Número inválido. Envía un número positivo (ej: 5).');
-                return;
-            }
-            await setMinDepositUSD(value);
-            await ctx.reply(`✅ Mínimo de depósito actualizado a: ${value} USD (equivale a ${(value * await getExchangeRateUSD()).toFixed(2)} CUP)`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-            return;
-        }
-
-        if (session.adminAction === 'set_min_withdraw') {
-            const value = parseFloat(text.replace(',', '.'));
-            if (isNaN(value) || value <= 0) {
-                await ctx.reply('❌ Número inválido. Envía un número positivo (ej: 2).');
-                return;
-            }
-            await setMinWithdrawUSD(value);
-            await ctx.reply(`✅ Mínimo de retiro actualizado a: ${value} USD (equivale a ${(value * await getExchangeRateUSD()).toFixed(2)} CUP)`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-            return;
-        }
-
-        if (session.adminAction === 'set_price') {
-            if (session.priceStep === 1) {
-                const parts = text.split('/');
-                if (parts.length !== 2) {
-                    await ctx.reply('❌ Formato inválido. Debe ser <code>cup/usd</code> (ej: 70/0.20)', { parse_mode: 'HTML' });
-                    return;
-                }
-                const cup = parseFloat(parts[0].replace(',', '.'));
-                const usd = parseFloat(parts[1].replace(',', '.'));
-                if (isNaN(cup) || isNaN(usd) || cup < 0 || usd < 0) {
-                    await ctx.reply('❌ Montos inválidos. Deben ser números positivos.');
-                    return;
-                }
-                session.priceTempCup = cup;
-                session.priceTempUsd = usd;
-                session.priceStep = 2;
-                await ctx.reply(
-                    `Paso 2/3: Ingresa el <b>multiplicador de premio</b> (ej: 500).`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.priceStep === 2) {
-                const multiplier = parseFloat(text.replace(',', '.'));
-                if (isNaN(multiplier) || multiplier < 0) {
-                    await ctx.reply('❌ Multiplicador inválido. Debe ser un número positivo.');
-                    return;
-                }
-                session.priceTempMultiplier = multiplier;
-                session.priceStep = 3;
-                await ctx.reply(
-                    `Paso 3/3: Confirma los valores:\n` +
-                    `💰 Costo: ${session.priceTempCup} CUP / ${session.priceTempUsd} USD\n` +
-                    `🎁 Multiplicador: x${session.priceTempMultiplier}\n\n` +
-                    `¿Guardar? Responde <b>sí</b> para confirmar o <b>no</b> para cancelar.`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.priceStep === 3) {
-                if (text.toLowerCase() === 'sí' || text.toLowerCase() === 'si') {
-                    const betType = session.betType;
-                    await supabase
-                        .from('play_prices')
-                        .update({
-                            amount_cup: session.priceTempCup,
-                            amount_usd: session.priceTempUsd,
-                            payout_multiplier: session.priceTempMultiplier,
-                            updated_at: new Date()
-                        })
-                        .eq('bet_type', betType);
-                    await ctx.reply(
-                        `✅ Precio para <b>${betType}</b> actualizado globalmente:\n` +
-                        `💰 Costo: ${session.priceTempCup} CUP / ${session.priceTempUsd} USD\n` +
-                        `🎁 Multiplicador: x${session.priceTempMultiplier}`,
-                        { parse_mode: 'HTML' }
-                    );
-                } else {
-                    await ctx.reply('❌ Configuración cancelada.');
-                }
-                delete session.adminAction;
-                delete session.priceStep;
-                delete session.priceTempCup;
-                delete session.priceTempUsd;
-                delete session.priceTempMultiplier;
-                delete session.betType;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-                return;
-            }
-        }
-
-        if (session.adminAction === 'set_min') {
-            if (session.minStep === 1) {
-                const minCup = parseFloat(text.replace(',', '.'));
-                if (isNaN(minCup) || minCup < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                session.minTempCup = minCup;
-                session.minStep = 2;
-                await ctx.reply(
-                    `Paso 2/2: Ingresa el <b>monto mínimo en USD</b> (0 = sin mínimo):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.minStep === 2) {
-                const minUsd = parseFloat(text.replace(',', '.'));
-                if (isNaN(minUsd) || minUsd < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                const betType = session.betType;
-                await supabase
-                    .from('play_prices')
-                    .update({
-                        min_cup: session.minTempCup,
-                        min_usd: minUsd,
-                        updated_at: new Date()
-                    })
-                    .eq('bet_type', betType);
-                await ctx.reply(
-                    `✅ Mínimos para <b>${betType}</b> actualizados:\n` +
-                    `📉 Mínimo CUP: ${session.minTempCup}\n` +
-                    `📉 Mínimo USD: ${minUsd}`,
-                    { parse_mode: 'HTML' }
-                );
-                delete session.adminAction;
-                delete session.minStep;
-                delete session.minTempCup;
-                delete session.betType;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-                return;
-            }
-        }
-
-        if (session.adminAction === 'winning_numbers') {
-            const sessionId = session.winningSessionId;
-            const success = await processWinningNumber(sessionId, text, ctx);
-            if (success) {
-                delete session.adminAction;
-                delete session.winningSessionId;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-            }
-            return;
-        }
-    }
-
-    // ========== FLUJOS DE USUARIO (DEPÓSITO, RETIRO, TRANSFERENCIA, APUESTAS) ==========
-
-    // Depósito: después de la foto, esperamos el monto
-    if (session.awaitingDepositAmount) {
-        const amountText = text;
-        const method = session.depositMethod;
-        const buffer = session.depositPhotoBuffer;
-        if (!buffer) {
-            await ctx.reply('❌ Error: no se encontró la captura. Por favor, comienza el proceso de recarga de nuevo.', getMainKeyboard(ctx));
-            delete session.awaitingDepositAmount;
-            return;
-        }
-
-        // Parsear monto con moneda
-        const parsed = parseAmountWithCurrency(amountText);
-        if (!parsed) {
-            await ctx.reply('❌ Formato inválido. Debes escribir el monto seguido de la moneda (ej: <code>500 cup</code> o <code>10 usdt</code>).', getMainKeyboard(ctx));
-            return;
-        }
-
-        // Validar que la moneda coincida con la del método
-        if (parsed.currency !== method.currency) {
-            await ctx.reply(`❌ La moneda del monto (${parsed.currency}) no coincide con la del método (${method.currency}). Por favor, envía el monto en ${method.currency}.`, getMainKeyboard(ctx));
-            return;
-        }
-
-        // Validar mínimo según USD (convertir a USD)
-        const minDepositUSD = await getMinDepositUSD();
-        const rateUSD = await getExchangeRateUSD();
-        let amountUSD = 0;
-        switch (parsed.currency) {
-            case 'USD': amountUSD = parsed.amount; break;
-            case 'CUP': amountUSD = parsed.amount / rateUSD; break;
-            case 'USDT': amountUSD = parsed.amount; break; // USDT ≈ USD
-            case 'TRX': amountUSD = parsed.amount * await getExchangeRateTRX() / rateUSD; break; // TRX a CUP a USD
-            case 'MLC': amountUSD = parsed.amount; break; // MLC ≈ USD
-        }
-        if (amountUSD < minDepositUSD) {
-            await ctx.reply(`❌ El monto mínimo de depósito es ${minDepositUSD} USD (equivalente a ${(minDepositUSD * rateUSD).toFixed(2)} CUP). Tu monto equivale a ${amountUSD.toFixed(2)} USD.`, getMainKeyboard(ctx));
-            return;
-        }
-
-        try {
-            const request = await createDepositRequest(uid, method.id, buffer, amountText, parsed.currency);
-            for (const adminId of ADMIN_IDS) {
-                try {
-                    await bot.telegram.sendMessage(adminId,
-                        `📥 <b>Nueva solicitud de DEPÓSITO</b>\n` +
-                        `👤 Usuario: ${ctx.from.first_name} (${uid})\n` +
-                        `🏦 Método: ${escapeHTML(method.name)} (${method.currency})\n` +
-                        `💰 Monto: ${amountText}\n` +
-                        `📎 <a href="${request.screenshot_url}">Ver captura</a>\n` +
-                        `🆔 Solicitud: ${request.id}`,
-                        {
-                            parse_mode: 'HTML',
-                            reply_markup: Markup.inlineKeyboard([
-                                [Markup.button.callback('✅ Aprobar', `approve_deposit_${request.id}`),
-                                 Markup.button.callback('❌ Rechazar', `reject_deposit_${request.id}`)]
-                            ]).reply_markup
-                        }
-                    );
-                } catch (e) {}
-            }
-            await ctx.reply(`✅ <b>Solicitud de depósito enviada</b>\nMonto: ${amountText}\n⏳ Tu solicitud está siendo procesada. Te notificaremos cuando se acredite. ¡Gracias por confiar en nosotros!`, { parse_mode: 'HTML' });
-        } catch (e) {
-            console.error(e);
-            await ctx.reply('❌ Error al procesar la solicitud. Por favor, intenta más tarde o contacta a soporte.', getMainKeyboard(ctx));
-        }
-
-        delete session.awaitingDepositAmount;
-        delete session.depositMethod;
-        delete session.depositPhotoBuffer;
-        return;
-    }
-
-    // Retiro: después de elegir método, esperamos monto
-    if (session.awaitingWithdrawAmount) {
-        const amountText = text;
-        const method = session.withdrawMethod;
-
-        // Parsear monto (se espera solo número, la moneda ya es la del método)
-        const amount = parseFloat(amountText.replace(',', '.'));
-        if (isNaN(amount) || amount <= 0) {
-            await ctx.reply('❌ Monto inválido. Por favor, envía un número positivo.', getMainKeyboard(ctx));
-            return;
-        }
-
-        // Validar mínimo en USD
-        const minWithdrawUSD = await getMinWithdrawUSD();
-        const rateUSD = await getExchangeRateUSD();
-        let amountUSD = 0;
-        switch (method.currency) {
-            case 'USD': amountUSD = amount; break;
-            case 'CUP': amountUSD = amount / rateUSD; break;
-            case 'USDT': amountUSD = amount; break;
-            case 'TRX': amountUSD = amount * await getExchangeRateTRX() / rateUSD; break;
-            case 'MLC': amountUSD = amount; break;
-        }
-        if (amountUSD < minWithdrawUSD) {
-            await ctx.reply(`❌ El monto mínimo de retiro es ${minWithdrawUSD} USD (equivalente a ${(minWithdrawUSD * rateUSD).toFixed(2)} CUP). Tu monto equivale a ${amountUSD.toFixed(2)} USD.`, getMainKeyboard(ctx));
-            return;
-        }
-
-        // Verificar saldo en esa moneda
-        let saldoDisponible = 0;
-        switch (method.currency) {
-            case 'CUP': saldoDisponible = parseFloat(user.cup); break;
-            case 'USD': saldoDisponible = parseFloat(user.usd); break;
-            case 'USDT': saldoDisponible = parseFloat(user.usdt); break;
-            case 'TRX': saldoDisponible = parseFloat(user.trx); break;
-            case 'MLC': saldoDisponible = parseFloat(user.mlc); break;
-        }
-        if (saldoDisponible < amount) {
-            await ctx.reply(`❌ No tienes suficiente saldo en ${method.currency}. Tu saldo: ${saldoDisponible.toFixed(2)} ${method.currency}`, getMainKeyboard(ctx));
-            return;
-        }
-
-        // Guardar en sesión
-        session.withdrawAmount = amount;
-        session.withdrawAmountUSD = amountUSD; // para referencia
-        session.awaitingWithdrawAccount = true;
-        delete session.awaitingWithdrawAmount;
-
-        await ctx.reply(
-            `✅ Monto aceptado: ${amount} ${method.currency} (equivale a ${amountUSD.toFixed(2)} USD)\n\n` +
-            `Ahora, por favor, escribe el <b>número o datos de la cuenta</b> a la que deseas que enviemos el retiro (para cripto, la dirección de tu wallet).`,
-            { parse_mode: 'HTML' }
-        );
-        return;
-    }
-
-    if (session.awaitingWithdrawAccount) {
-        const account = text;
-        const amount = session.withdrawAmount;
-        const amountUSD = session.withdrawAmountUSD;
-        const method = session.withdrawMethod;
-        const rateUSD = await getExchangeRateUSD();
-
-        // Verificar saldo nuevamente
-        let saldoDisponible = 0;
-        switch (method.currency) {
-            case 'CUP': saldoDisponible = parseFloat(user.cup); break;
-            case 'USD': saldoDisponible = parseFloat(user.usd); break;
-            case 'USDT': saldoDisponible = parseFloat(user.usdt); break;
-            case 'TRX': saldoDisponible = parseFloat(user.trx); break;
-            case 'MLC': saldoDisponible = parseFloat(user.mlc); break;
-        }
-        if (saldoDisponible < amount) {
-            await ctx.reply('❌ Saldo insuficiente. La solicitud ha expirado.', getMainKeyboard(ctx));
-            delete session.awaitingWithdrawAccount;
-            delete session.withdrawMethod;
-            delete session.withdrawAmount;
-            delete session.withdrawAmountUSD;
-            return;
-        }
-
-        // Crear solicitud
-        const { data: request, error } = await supabase
-            .from('withdraw_requests')
-            .insert({
-                user_id: uid,
-                method_id: method.id,
-                amount: amount,
-                currency: method.currency,
-                amount_usd: amountUSD,
-                account_info: account,
-                status: 'pending'
-            })
-            .select()
-            .single();
-
-        if (error) {
-            await ctx.reply(`❌ Error al crear la solicitud: ${error.message}`, getMainKeyboard(ctx));
-        } else {
-            for (const adminId of ADMIN_IDS) {
-                try {
-                    await bot.telegram.sendMessage(adminId,
-                        `📤 <b>Nueva solicitud de RETIRO</b>\n` +
-                        `👤 Usuario: ${ctx.from.first_name} (${uid})\n` +
-                        `💰 Monto: ${amount} ${method.currency} (≈ ${amountUSD.toFixed(2)} USD)\n` +
-                        `🏦 Método: ${escapeHTML(method.name)}\n` +
-                        `📞 Cuenta: ${escapeHTML(account)}\n` +
-                        `🆔 Solicitud: ${request.id}`,
-                        {
-                            parse_mode: 'HTML',
-                            reply_markup: Markup.inlineKeyboard([
-                                [Markup.button.callback('✅ Aprobar', `approve_withdraw_${request.id}`),
-                                 Markup.button.callback('❌ Rechazar', `reject_withdraw_${request.id}`)]
-                            ]).reply_markup
-                        }
-                    );
-                } catch (e) {}
-            }
-            await ctx.reply(
-                `✅ <b>Solicitud de retiro enviada</b>\n` +
-                `💰 Monto: ${amount} ${method.currency}\n` +
-                `⏳ Procesaremos tu solicitud a la mayor brevedad. Te avisaremos cuando esté lista.`,
-                { parse_mode: 'HTML' }
-            );
-        }
-
-        delete session.awaitingWithdrawAccount;
-        delete session.withdrawMethod;
-        delete session.withdrawAmount;
-        delete session.withdrawAmountUSD;
-        return;
-    }
-
-    // Transferencia
-    if (session.awaitingTransferTarget) {
-        let targetIdentifier = text.trim();
-        if (targetIdentifier.startsWith('@')) {
-            targetIdentifier = targetIdentifier.slice(1);
-        }
-        let targetUser = null;
-        if (targetIdentifier) {
-            const { data: userByUsername } = await supabase
-                .from('users')
-                .select('telegram_id, username, first_name')
-                .eq('username', targetIdentifier)
-                .maybeSingle();
-            if (userByUsername) {
-                targetUser = userByUsername;
-            } else {
-                const targetId = parseInt(targetIdentifier);
-                if (!isNaN(targetId)) {
-                    const { data: userById } = await supabase
-                        .from('users')
-                        .select('telegram_id, username, first_name')
-                        .eq('telegram_id', targetId)
-                        .maybeSingle();
-                    if (userById) {
-                        targetUser = userById;
-                    }
-                }
-            }
-        }
-
-        if (!targetUser) {
-            await ctx.reply('❌ Usuario no encontrado. Asegúrate de que el nombre de usuario sea correcto o de que el ID numérico esté registrado.', getMainKeyboard(ctx));
-            delete session.awaitingTransferTarget;
-            return;
-        }
-        if (targetUser.telegram_id === uid) {
-            await ctx.reply('❌ No puedes transferirte saldo a ti mismo. Elige otro usuario.', getMainKeyboard(ctx));
-            delete session.awaitingTransferTarget;
-            return;
-        }
-
-        session.transferTarget = targetUser.telegram_id;
-        session.awaitingTransferAmount = true;
-        delete session.awaitingTransferTarget;
-        const displayName = targetUser.first_name || targetUser.username || targetUser.telegram_id;
-        await ctx.reply(
-            `✅ Usuario encontrado: ${escapeHTML(displayName)}\n\n` +
-            `Ahora envía el <b>monto y la moneda</b> que deseas transferir (ej: <code>500 cup</code>, <code>10 usdt</code>).\n` +
-            `💰 Tus saldos: CUP: ${parseFloat(user.cup).toFixed(2)}, USD: ${parseFloat(user.usd).toFixed(2)}, USDT: ${parseFloat(user.usdt).toFixed(2)}, TRX: ${parseFloat(user.trx).toFixed(2)}, MLC: ${parseFloat(user.mlc).toFixed(2)}`,
-            { parse_mode: 'HTML' }
-        );
-        return;
-    }
-
-    if (session.awaitingTransferAmount) {
-        const parsed = parseAmountWithCurrency(text);
-        if (!parsed) {
-            await ctx.reply('❌ Formato inválido. Debe ser <code>monto moneda</code> (ej: 500 cup).', getMainKeyboard(ctx));
-            return;
-        }
-
-        const amount = parsed.amount;
-        const currency = parsed.currency;
-        const targetId = session.transferTarget;
-
-        // Verificar saldo en esa moneda
-        let saldoOrigen = 0;
-        switch (currency) {
-            case 'CUP': saldoOrigen = parseFloat(user.cup); break;
-            case 'USD': saldoOrigen = parseFloat(user.usd); break;
-            case 'USDT': saldoOrigen = parseFloat(user.usdt); break;
-            case 'TRX': saldoOrigen = parseFloat(user.trx); break;
-            case 'MLC': saldoOrigen = parseFloat(user.mlc); break;
-            default: saldoOrigen = 0;
-        }
-        if (saldoOrigen < amount) {
-            await ctx.reply(`❌ No tienes suficiente saldo en ${currency}. Disponible: ${saldoOrigen.toFixed(2)} ${currency}`, getMainKeyboard(ctx));
-            return;
-        }
-
-        // Descontar del origen
-        const updateOrigen = {};
-        updateOrigen[currency.toLowerCase()] = saldoOrigen - amount;
-        await supabase
-            .from('users')
-            .update({ ...updateOrigen, updated_at: new Date() })
-            .eq('telegram_id', uid);
-
-        // Acreditar al destino
-        const { data: targetUser } = await supabase
-            .from('users')
-            .select('*')
-            .eq('telegram_id', targetId)
-            .single();
-
-        let saldoDestino = 0;
-        switch (currency) {
-            case 'CUP': saldoDestino = parseFloat(targetUser.cup); break;
-            case 'USD': saldoDestino = parseFloat(targetUser.usd); break;
-            case 'USDT': saldoDestino = parseFloat(targetUser.usdt); break;
-            case 'TRX': saldoDestino = parseFloat(targetUser.trx); break;
-            case 'MLC': saldoDestino = parseFloat(targetUser.mlc); break;
-        }
-        const updateDestino = {};
-        updateDestino[currency.toLowerCase()] = saldoDestino + amount;
-        await supabase
-            .from('users')
-            .update({ ...updateDestino, updated_at: new Date() })
-            .eq('telegram_id', targetId);
-
-        // Obtener nombres
-        const { data: fromUser } = await supabase
-            .from('users')
-            .select('first_name, username')
-            .eq('telegram_id', uid)
-            .single();
-        const fromName = fromUser?.first_name || fromUser?.username || uid;
-        const { data: toUser } = await supabase
-            .from('users')
-            .select('first_name, username')
-            .eq('telegram_id', targetId)
-            .single();
-        const toName = toUser?.first_name || toUser?.username || targetId;
-
-        await ctx.reply(
-            `✅ Transferencia realizada con éxito:\n` +
-            `💰 Monto: ${amount} ${currency}\n` +
-            `👤 De: ${escapeHTML(fromName)}\n` +
-            `👤 A: ${escapeHTML(toName)}`,
-            { parse_mode: 'HTML' }
-        );
-
-        // Notificar al destinatario
-        try {
-            await bot.telegram.sendMessage(targetId,
-                `🔄 <b>Has recibido una transferencia</b>\n\n` +
-                `👤 De: ${escapeHTML(fromName)}\n` +
-                `💰 Monto: ${amount} ${currency}\n` +
-                `📊 Saldo actualizado.`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {}
-
-        delete session.transferTarget;
-        delete session.awaitingTransferAmount;
-        return;
-    }
-
-    // Apuestas
-    if (session.awaitingBet) {
-        const betType = session.betType;
-        const lottery = session.lottery;
-        const sessionId = session.sessionId;
-
-        if (!sessionId) {
-            await ctx.reply('❌ No se ha seleccionado una sesión activa. Por favor, comienza de nuevo desde "🎲 Jugar".', getMainKeyboard(ctx));
-            delete session.awaitingBet;
-            return;
-        }
-
-        const { data: activeSession } = await supabase
-            .from('lottery_sessions')
-            .select('*')
-            .eq('id', sessionId)
-            .eq('status', 'open')
-            .maybeSingle();
-
-        if (!activeSession) {
-            await ctx.reply('❌ La sesión de juego ha sido cerrada. No se pueden registrar más apuestas para esta sesión.', getMainKeyboard(ctx));
-            delete session.awaitingBet;
-            return;
-        }
-
-        const parsed = parseBetMessage(text, betType);
-        if (!parsed.ok) {
-            await ctx.reply('❌ No se pudo interpretar tu apuesta. Verifica el formato y vuelve a intentarlo.\n\nSi necesitas ayuda, escribe "❓ Cómo jugar".', getMainKeyboard(ctx));
-            return;
-        }
-
-        // Verificar que todos los items tengan moneda válida (CUP o USD por ahora)
-        for (const item of parsed.items) {
-            if (!['CUP', 'USD'].includes(item.currency)) {
-                await ctx.reply('❌ Solo se permiten apuestas en CUP o USD por ahora.', getMainKeyboard(ctx));
-                return;
-            }
-        }
-
-        // Verificar saldos
-        let totalCUPNeeded = 0, totalUSDNeeded = 0;
-        for (const item of parsed.items) {
-            if (item.currency === 'CUP') totalCUPNeeded += item.amount;
-            else totalUSDNeeded += item.amount;
-        }
-
-        if (totalCUPNeeded > parseFloat(user.cup)) {
-            await ctx.reply(`❌ Saldo CUP insuficiente. Necesitas ${totalCUPNeeded.toFixed(2)} CUP y tienes ${parseFloat(user.cup).toFixed(2)} CUP.`, getMainKeyboard(ctx));
-            return;
-        }
-        if (totalUSDNeeded > parseFloat(user.usd)) {
-            await ctx.reply(`❌ Saldo USD insuficiente. Necesitas ${totalUSDNeeded.toFixed(2)} USD y tienes ${parseFloat(user.usd).toFixed(2)} USD.`, getMainKeyboard(ctx));
-            return;
-        }
-
-        // Descontar saldos
-        await supabase
-            .from('users')
-            .update({
-                cup: parseFloat(user.cup) - totalCUPNeeded,
-                usd: parseFloat(user.usd) - totalUSDNeeded,
-                updated_at: new Date()
-            })
-            .eq('telegram_id', uid);
-
-        // Guardar apuesta
-        const { data: bet, error } = await supabase
-            .from('bets')
-            .insert({
-                user_id: uid,
-                lottery,
-                session_id: sessionId,
-                bet_type: betType,
-                raw_text: text,
-                items: parsed.items,
-                placed_at: new Date()
-            })
-            .select()
-            .single();
-
-        if (error) {
-            console.error('Error insertando apuesta:', error);
-            await ctx.reply('❌ Error al registrar la apuesta. Por favor, intenta más tarde.', getMainKeyboard(ctx));
-            return;
-        }
-
-        await ctx.replyWithHTML(
-            `✅ <b>Jugada registrada exitosamente</b>\n` +
-            `🎰 ${escapeHTML(lottery)} - ${escapeHTML(betType)}\n` +
-            `📝 <code>${escapeHTML(text)}</code>\n` +
-            `💰 Costo: ${parsed.items.map(it => `${it.amount} ${it.currency}`).join(', ')}\n\n` +
-            `🍀 ¡Mucha suerte! Esperamos que seas el próximo ganador.`
-        );
-
-        await ctx.reply('¿Qué deseas hacer ahora?', getMainKeyboard(ctx));
-
-        delete session.awaitingBet;
-        delete session.betType;
-        delete session.lottery;
-        delete session.sessionId;
-        return;
-    }
-
-    // Si no se reconoce el mensaje, ofrecer ayuda
-    await ctx.reply(
-        'Lo siento, no entendí ese mensaje. 😕\n\n' +
-        'Por favor, utiliza los botones del menú para navegar. Si necesitas ayuda, escribe "❓ Cómo jugar".',
-        getMainKeyboard(ctx)
-    );
+    res.json({ success: true, message: 'Números publicados y premios calculados' });
 });
 
-// ========== MANEJADOR DE FOTOS (DEPÓSITO) ==========
-bot.on(message('photo'), async (ctx) => {
-    const uid = ctx.from.id;
-    const session = ctx.session;
-
-    if (session.awaitingDepositPhoto) {
-        const photo = ctx.message.photo.pop();
-        const fileId = photo.file_id;
-        const fileLink = await ctx.telegram.getFileLink(fileId);
-        const response = await axios({ url: fileLink.href, responseType: 'arraybuffer' });
-        const buffer = Buffer.from(response.data, 'binary');
-
-        session.depositPhotoBuffer = buffer;
-        delete session.awaitingDepositPhoto;
-        session.awaitingDepositAmount = true;
-
-        await ctx.reply('✅ Captura recibida correctamente. Ahora, por favor, envía el <b>monto transferido</b> con la moneda (ej: <code>500 cup</code> o <code>10 usdt</code>).', { parse_mode: 'HTML' });
-        return;
-    }
-
-    await ctx.reply('No se esperaba una foto en este momento. Por favor, usa los botones del menú.', getMainKeyboard(ctx));
+// ========== SERVIDOR ESTÁTICO ==========
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'webapp', 'index.html'));
+});
+app.get('/app.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'webapp', 'app.html'));
 });
 
-// ========== MANEJADORES DE APROBACIÓN/RECHAZO DE SOLICITUDES ==========
-bot.action(/approve_deposit_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        await ctx.answerCbQuery('⛔ No autorizado', { show_alert: true });
-        return;
-    }
+// ========== KEEP-ALIVE ==========
+setInterval(async () => {
     try {
-        const requestId = parseInt(ctx.match[1]);
-        const { data: request } = await supabase
-            .from('deposit_requests')
-            .select('*')
-            .eq('id', requestId)
-            .single();
-
-        if (!request) {
-            await ctx.answerCbQuery('Solicitud no encontrada', { show_alert: true });
-            return;
-        }
-
-        // Obtener usuario
-        const { data: user } = await supabase
-            .from('users')
-            .select('*')
-            .eq('telegram_id', request.user_id)
-            .single();
-
-        if (!user) {
-            await ctx.answerCbQuery('Usuario no encontrado', { show_alert: true });
-            return;
-        }
-
-        // Acreditar según la moneda del depósito
-        const amount = parseFloat(request.amount.split(' ')[0]); // asumimos formato "monto moneda"
-        const currency = request.currency;
-
-        let updateData = {};
-        switch (currency) {
-            case 'CUP': updateData.cup = parseFloat(user.cup) + amount; break;
-            case 'USD': updateData.usd = parseFloat(user.usd) + amount; break;
-            case 'USDT': updateData.usdt = parseFloat(user.usdt) + amount; break;
-            case 'TRX': updateData.trx = parseFloat(user.trx) + amount; break;
-            case 'MLC': updateData.mlc = parseFloat(user.mlc) + amount; break;
-            default: await ctx.answerCbQuery('Moneda no soportada', { show_alert: true }); return;
-        }
-        updateData.updated_at = new Date();
-
-        await supabase
-            .from('users')
-            .update(updateData)
-            .eq('telegram_id', request.user_id);
-
-        await supabase
-            .from('deposit_requests')
-            .update({ status: 'approved', updated_at: new Date() })
-            .eq('id', requestId);
-
-        // Notificar al usuario
-        await ctx.telegram.sendMessage(request.user_id,
-            `✅ <b>Depósito aprobado</b>\n\n` +
-            `💰 Monto: ${request.amount} ${currency}\n` +
-            `💵 Se acreditó a tu saldo en ${currency}.\n\n` +
-            `¡Gracias por confiar en nosotros!`,
-            { parse_mode: 'HTML' }
-        );
-
-        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-        await ctx.reply('✅ Depósito aprobado y saldo actualizado correctamente.');
-        await ctx.answerCbQuery();
+        await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`);
+        console.log('[Keep-Alive] Ping a Telegram OK');
     } catch (e) {
-        console.error(e);
-        await ctx.answerCbQuery('❌ Error al aprobar. Revisa los logs.', { show_alert: true });
+        console.error('[Keep-Alive] Error:', e.message);
     }
+}, 5 * 60 * 1000);
+
+// ========== INICIAR SERVIDOR Y BOT ==========
+app.listen(PORT, () => {
+    console.log(`🚀 Backend de 4pu3$t4$_Qva corriendo en http://localhost:${PORT}`);
+    console.log(`📡 WebApp servida en ${WEBAPP_URL}`);
+    console.log(`🤖 Iniciando bot de Telegram...`);
 });
 
-bot.action(/reject_deposit_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    try {
-        const requestId = parseInt(ctx.match[1]);
-        await supabase
-            .from('deposit_requests')
-            .update({ status: 'rejected', updated_at: new Date() })
-            .eq('id', requestId);
+bot.launch()
+    .then(() => console.log('🤖 Bot de Telegram iniciado correctamente'))
+    .catch(err => console.error('❌ Error al iniciar el bot:', err));
 
-        const { data: request } = await supabase
-            .from('deposit_requests')
-            .select('user_id')
-            .eq('id', requestId)
-            .single();
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-        if (request) {
-            await ctx.telegram.sendMessage(request.user_id,
-                '❌ <b>Depósito rechazado</b>\nLa solicitud no pudo ser procesada. Por favor, contacta al administrador para más información.',
-                { parse_mode: 'HTML' }
-            );
-        }
-        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-        await ctx.reply('❌ Depósito rechazado.');
-        await ctx.answerCbQuery();
-    } catch (e) {
-        console.error(e);
-        await ctx.answerCbQuery('❌ Error al rechazar', { show_alert: true });
-    }
-});
-
-bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) {
-        await ctx.answerCbQuery('⛔ No autorizado', { show_alert: true });
-        return;
-    }
-    try {
-        const requestId = parseInt(ctx.match[1]);
-        const { data: request } = await supabase
-            .from('withdraw_requests')
-            .select('*')
-            .eq('id', requestId)
-            .single();
-
-        if (!request) {
-            await ctx.answerCbQuery('Solicitud no encontrada', { show_alert: true });
-            return;
-        }
-
-        const { data: user } = await supabase
-            .from('users')
-            .select('*')
-            .eq('telegram_id', request.user_id)
-            .single();
-
-        // Verificar saldo
-        let saldoActual = 0;
-        switch (request.currency) {
-            case 'CUP': saldoActual = parseFloat(user.cup); break;
-            case 'USD': saldoActual = parseFloat(user.usd); break;
-            case 'USDT': saldoActual = parseFloat(user.usdt); break;
-            case 'TRX': saldoActual = parseFloat(user.trx); break;
-            case 'MLC': saldoActual = parseFloat(user.mlc); break;
-        }
-        if (saldoActual < request.amount) {
-            await ctx.reply('❌ El usuario ya no tiene saldo suficiente para este retiro.');
-            return;
-        }
-
-        // Debitar
-        let updateData = {};
-        switch (request.currency) {
-            case 'CUP': updateData.cup = saldoActual - request.amount; break;
-            case 'USD': updateData.usd = saldoActual - request.amount; break;
-            case 'USDT': updateData.usdt = saldoActual - request.amount; break;
-            case 'TRX': updateData.trx = saldoActual - request.amount; break;
-            case 'MLC': updateData.mlc = saldoActual - request.amount; break;
-        }
-        updateData.updated_at = new Date();
-
-        await supabase
-            .from('users')
-            .update(updateData)
-            .eq('telegram_id', request.user_id);
-
-        await supabase
-            .from('withdraw_requests')
-            .update({ status: 'approved', updated_at: new Date() })
-            .eq('id', requestId);
-
-        await ctx.telegram.sendMessage(request.user_id,
-            `✅ <b>Retiro aprobado</b>\n\n` +
-            `💰 Monto: ${request.amount} ${request.currency}\n` +
-            `💵 Se debitaron de tu saldo.\n\n` +
-            `Los fondos serán enviados a la cuenta proporcionada en breve.`,
-            { parse_mode: 'HTML' }
-        );
-
-        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-        await ctx.reply('✅ Retiro aprobado y saldo debitado correctamente.');
-        await ctx.answerCbQuery();
-    } catch (e) {
-        console.error(e);
-        await ctx.answerCbQuery('❌ Error al aprobar', { show_alert: true });
-    }
-});
-
-bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
-    if (!isAdmin(ctx.from.id)) return;
-    try {
-        const requestId = parseInt(ctx.match[1]);
-        await supabase.from('withdraw_requests').update({ status: 'rejected', updated_at: new Date() }).eq('id', requestId);
-        const { data: request } = await supabase.from('withdraw_requests').select('user_id').eq('id', requestId).single();
-        if (request) {
-            await ctx.telegram.sendMessage(request.user_id,
-                '❌ <b>Retiro rechazado</b>\nTu solicitud no pudo ser procesada. Por favor, contacta al administrador para más detalles.',
-                { parse_mode: 'HTML' }
-            );
-        }
-        await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-        await ctx.reply('❌ Retiro rechazado.');
-        await ctx.answerCbQuery();
-    } catch (e) {
-        console.error(e);
-        await ctx.answerCbQuery('❌ Error al rechazar', { show_alert: true });
-    }
-});
-
-// ========== TAREAS PROGRAMADAS ==========
-async function closeExpiredSessions() {
-    try {
-        const now = new Date().toISOString();
-        const { data: expiredSessions } = await supabase
-            .from('lottery_sessions')
-            .select('*')
-            .eq('status', 'open')
-            .lt('end_time', now);
-
-        for (const session of expiredSessions || []) {
-            await supabase
-                .from('lottery_sessions')
-                .update({ status: 'closed', updated_at: new Date() })
-                .eq('id', session.id);
-
-            const region = regionMap[session.lottery];
-            await broadcastToAllUsers(
-                `🔴 <b>SESIÓN CERRADA</b>\n\n` +
-                `🎰 ${region?.emoji || '🎰'} <b>${escapeHTML(session.lottery)}</b> - Turno <b>${escapeHTML(session.time_slot)}</b>\n` +
-                `📅 Fecha: ${session.date}\n\n` +
-                `❌ Ya no se reciben más apuestas para esta sesión.\n` +
-                `🔢 Pronto anunciaremos el número ganador. ¡Mantente atento!`
-            );
-        }
-    } catch (e) {
-        console.error('Error cerrando sesiones:', e);
-    }
-}
-
-async function openScheduledSessions() {
-    try {
-        const now = moment.tz(TIMEZONE);
-        const today = now.format('YYYY-MM-DD');
-        const currentMinutes = now.hours() * 60 + now.minutes();
-
-        const regions = ['Florida', 'Georgia', 'Nueva York'];
-        for (const lottery of regions) {
-            const region = regionMap[lottery];
-            const schedule = getAllowedHours(region.key);
-            if (!schedule) continue;
-
-            for (const slot of schedule.slots) {
-                const startMinutes = slot.start * 60;
-                if (currentMinutes >= startMinutes && currentMinutes < startMinutes + 5) {
-                    const { data: existing } = await supabase
-                        .from('lottery_sessions')
-                        .select('id')
-                        .eq('lottery', lottery)
-                        .eq('date', today)
-                        .eq('time_slot', slot.name)
-                        .maybeSingle();
-
-                    if (!existing) {
-                        const endTime = getEndTimeFromSlot(lottery, slot.name);
-                        if (endTime) {
-                            await supabase
-                                .from('lottery_sessions')
-                                .insert({
-                                    lottery,
-                                    date: today,
-                                    time_slot: slot.name,
-                                    status: 'open',
-                                    end_time: endTime.toISOString()
-                                });
-
-                            await broadcastToAllUsers(
-                                `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
-                                `✨ La región ${region.emoji} <b>${escapeHTML(lottery)}</b> ha abierto su turno de <b>${escapeHTML(slot.name)}</b>.\n` +
-                                `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
-                                `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
-                                `🍀 ¡La suerte te espera!`
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    } catch (e) {
-        console.error('Error abriendo sesiones:', e);
-    }
-}
-
-async function withdrawNotifications() {
-    const now = moment.tz(TIMEZONE);
-    const currentHour = now.hour();
-    const currentMinute = now.minute();
-
-    if (currentHour === 22 && currentMinute === 0) {
-        await broadcastToAllUsers(
-            `⏰ <b>Horario de Retiros ABIERTO</b>\n\n` +
-            `Ya puedes solicitar tus retiros de 10:00 PM a 11:30 PM (hora Cuba).\n` +
-            `Puedes retirar en CUP, USD, USDT, TRX o MLC según los métodos disponibles.`,
-            'HTML'
-        );
-    } else if (currentHour === 23 && currentMinute === 30) {
-        await broadcastToAllUsers(
-            `⏰ <b>Horario de Retiros CERRADO</b>\n\n` +
-            `La ventana de retiros ha finalizado. Vuelve mañana de 10:00 PM a 11:30 PM (hora Cuba).`,
-            'HTML'
-        );
-    }
-}
-
-cron.schedule('* * * * *', () => {
-    closeExpiredSessions();
-    openScheduledSessions();
-    withdrawNotifications();
-}, { timezone: TIMEZONE });
-
-module.exports = bot;
+module.exports = app;
