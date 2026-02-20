@@ -1,10 +1,8 @@
 // ==============================
 // backend.js - API REST + Bot de Telegram (UNIFICADO)
-// Versión con soporte para múltiples admins, horarios por región,
-// configuración global de precios con mínimos y máximos, y validación en apuestas.
-// MODIFICADO: Soporte para username en usuarios, transferencias por username,
-// edición/cancelación de jugadas, y obtención de sesiones específicas.
-// AÑADIDO: Límites (mín/máx) en métodos de pago y en jugadas.
+// Versión con soporte multi-moneda (CUP, USD, USDT, TRX, MLC)
+// Tasas configurables por admin, límites en métodos y jugadas.
+// Incluye emojis regionales y formato de número ganador.
 // ==============================
 
 require('dotenv').config();
@@ -24,7 +22,6 @@ const bot = require('./bot');
 const PORT = process.env.PORT || 3000;
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [];
-const ADMIN_CHANNEL = process.env.ADMIN_CHANNEL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const BONUS_CUP_DEFAULT = parseFloat(process.env.BONUS_CUP_DEFAULT) || 70;
@@ -47,11 +44,11 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 } // 5MB
 });
 
-// ========== MAPA DE REGIONES ==========
-const regionKeyMap = {
-    'Florida': 'florida',
-    'Georgia': 'georgia',
-    'Nueva York': 'newyork'
+// ========== MAPA DE REGIONES CON EMOJIS ==========
+const regionMap = {
+    'Florida': { key: 'florida', emoji: '🦩' },
+    'Georgia': { key: 'georgia', emoji: '🍑' },
+    'Nueva York': { key: 'newyork', emoji: '🗽' }
 };
 
 // ========== FUNCIONES AUXILIARES ==========
@@ -72,16 +69,79 @@ function verifyTelegramWebAppData(initData, botToken) {
     return computedHash === hash;
 }
 
-async function getExchangeRate() {
+// Obtener todas las tasas
+async function getExchangeRates() {
     const { data } = await supabase
         .from('exchange_rate')
-        .select('rate')
+        .select('rate, rate_usdt, rate_trx')
         .eq('id', 1)
         .single();
-    return data?.rate || 110;
+    return data || { rate: 110, rate_usdt: 110, rate_trx: 1 };
 }
 
-// ========== FUNCIÓN GETORCREATEUSER MODIFICADA PARA INCLUIR USERNAME ==========
+async function getExchangeRateUSD() {
+    const rates = await getExchangeRates();
+    return rates.rate;
+}
+
+async function getExchangeRateUSDT() {
+    const rates = await getExchangeRates();
+    return rates.rate_usdt;
+}
+
+async function getExchangeRateTRX() {
+    const rates = await getExchangeRates();
+    return rates.rate_trx;
+}
+
+async function setExchangeRateUSD(rate) {
+    await supabase
+        .from('exchange_rate')
+        .update({ rate, updated_at: new Date() })
+        .eq('id', 1);
+}
+
+async function setExchangeRateUSDT(rate) {
+    await supabase
+        .from('exchange_rate')
+        .update({ rate_usdt: rate, updated_at: new Date() })
+        .eq('id', 1);
+}
+
+async function setExchangeRateTRX(rate) {
+    await supabase
+        .from('exchange_rate')
+        .update({ rate_trx: rate, updated_at: new Date() })
+        .eq('id', 1);
+}
+
+// Convertir cualquier moneda a CUP
+async function convertToCUP(amount, currency) {
+    const rates = await getExchangeRates();
+    switch (currency) {
+        case 'CUP': return amount;
+        case 'USD': return amount * rates.rate;
+        case 'USDT': return amount * rates.rate_usdt;
+        case 'TRX': return amount * rates.rate_trx;
+        case 'MLC': return amount * rates.rate; // MLC se trata como USD
+        default: return 0;
+    }
+}
+
+// Convertir de CUP a otra moneda
+async function convertFromCUP(amountCUP, targetCurrency) {
+    const rates = await getExchangeRates();
+    switch (targetCurrency) {
+        case 'CUP': return amountCUP;
+        case 'USD': return amountCUP / rates.rate;
+        case 'USDT': return amountCUP / rates.rate_usdt;
+        case 'TRX': return amountCUP / rates.rate_trx;
+        case 'MLC': return amountCUP / rates.rate;
+        default: return 0;
+    }
+}
+
+// ========== FUNCIÓN GETORCREATEUSER (con nuevos campos) ==========
 async function getOrCreateUser(telegramId, firstName = 'Jugador', username = null) {
     let { data: user } = await supabase
         .from('users')
@@ -90,26 +150,28 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador', username = nul
         .single();
 
     if (!user) {
-        const rate = await getExchangeRate();
-        const bonusUSD = parseFloat((BONUS_CUP_DEFAULT / rate).toFixed(2));
-
         const { data: newUser } = await supabase
             .from('users')
-            .insert({ 
-                telegram_id: telegramId, 
+            .insert({
+                telegram_id: telegramId,
                 first_name: firstName,
                 username: username,
-                bonus_usd: bonusUSD 
+                bonus_cup: BONUS_CUP_DEFAULT,
+                cup: 0,
+                usd: 0,
+                usdt: 0,
+                trx: 0,
+                mlc: 0
             })
             .select()
             .single();
         user = newUser;
 
-        // Enviar mensaje de bienvenida con el bono (opcional, pero lo hacemos desde el bot)
+        // Enviar mensaje de bienvenida con el bono
         try {
             await bot.telegram.sendMessage(telegramId,
                 `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
-                `Has recibido <b>${bonusUSD} USD</b> (equivalente a ${BONUS_CUP_DEFAULT} CUP) como bono no retirable.\n` +
+                `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
                 `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
                 { parse_mode: 'HTML' }
             );
@@ -144,17 +206,40 @@ async function getMinWithdrawUSD() {
     return data ? parseFloat(data.value) : 1.0;
 }
 
-// ========== FUNCIONES DE PARSEO DE APUESTAS (MÚLTIPLES NÚMEROS POR LÍNEA) ==========
+async function setMinDepositUSD(value) {
+    await supabase
+        .from('app_config')
+        .upsert({ key: 'min_deposit_usd', value: value.toString() }, { onConflict: 'key' });
+}
+
+async function setMinWithdrawUSD(value) {
+    await supabase
+        .from('app_config')
+        .upsert({ key: 'min_withdraw_usd', value: value.toString() }, { onConflict: 'key' });
+}
+
+// Parsear monto con moneda (ej: "500 cup", "10 usdt")
+function parseAmountWithCurrency(text) {
+    const lower = text.toLowerCase().replace(',', '.').trim();
+    const match = lower.match(/^(\d+(?:\.\d+)?)\s*(cup|usd|usdt|trx|mlc)$/);
+    if (!match) return null;
+    return {
+        amount: parseFloat(match[1]),
+        currency: match[2].toUpperCase()
+    };
+}
+
+// ========== FUNCIONES DE PARSEO DE APUESTAS (con soporte de moneda) ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return [];
 
-    const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(usd|cup)?$/i);
+    const match = line.match(/^([\d\s,]+)\s*(?:con|\*)\s*([0-9.]+)\s*(cup|usd)?$/i);
     if (!match) return [];
 
     let numerosStr = match[1].trim();
     const montoStr = match[2];
-    const moneda = (match[3] || 'usd').toLowerCase();
+    const moneda = (match[3] || 'usd').toUpperCase();
 
     const numeros = numerosStr.split(/[\s,]+/).filter(n => n.length > 0);
     const montoBase = parseFloat(montoStr);
@@ -190,8 +275,8 @@ function parseBetLine(line, betType) {
 
         resultados.push({
             numero: numeroGuardado,
-            usd: moneda === 'usd' ? montoReal : 0,
-            cup: moneda === 'cup' ? montoReal : 0
+            currency: moneda,
+            amount: montoReal
         });
     }
 
@@ -201,28 +286,28 @@ function parseBetLine(line, betType) {
 function parseBetMessage(text, betType) {
     const lines = text.split('\n').map(l => l.trim()).filter(l => l);
     const items = [];
-    let totalUSD = 0, totalCUP = 0;
+    let totalCUP = 0, totalUSD = 0;
 
     for (const line of lines) {
         const parsedItems = parseBetLine(line, betType);
         for (const item of parsedItems) {
             items.push(item);
-            totalUSD += item.usd;
-            totalCUP += item.cup;
+            if (item.currency === 'CUP') totalCUP += item.amount;
+            else if (item.currency === 'USD') totalUSD += item.amount;
         }
     }
 
     return {
         items,
-        totalUSD,
         totalCUP,
+        totalUSD,
         ok: items.length > 0
     };
 }
 
 function getEndTimeFromSlot(lottery, timeSlot) {
-    const lotteryKey = regionKeyMap[lottery];
-    if (!lotteryKey) return null;
+    const region = regionMap[lottery];
+    if (!region) return null;
     const schedules = {
         florida: {
             slots: [
@@ -240,13 +325,13 @@ function getEndTimeFromSlot(lottery, timeSlot) {
         newyork: {
             slots: [
                 { name: '🌅 Mañana', end: 14 },
-                { name: '☀️ Tarde', end: 22 }
+                { name: '🌙 Noche', end: 22 }
             ]
         }
     };
-    const region = schedules[lotteryKey];
-    if (!region) return null;
-    const slot = region.slots.find(s => s.name === timeSlot);
+    const regionSched = schedules[region.key];
+    if (!regionSched) return null;
+    const slot = regionSched.slots.find(s => s.name === timeSlot);
     if (!slot) return null;
     const now = moment.tz(TIMEZONE);
     let hour = Math.floor(slot.end);
@@ -301,7 +386,7 @@ app.post('/api/auth', async (req, res) => {
 
     const tgUser = JSON.parse(userStr);
     const user = await getOrCreateUser(tgUser.id, tgUser.first_name, tgUser.username);
-    const exchangeRate = await getExchangeRate();
+    const rates = await getExchangeRates();
 
     const botInfo = await axios.get(`https://api.telegram.org/bot${BOT_TOKEN}/getMe`)
         .then(r => r.data.result)
@@ -310,13 +395,15 @@ app.post('/api/auth', async (req, res) => {
     res.json({
         user,
         isAdmin: isAdmin(tgUser.id),
-        exchangeRate,
+        exchangeRate: rates.rate,
+        exchangeRateUSDT: rates.rate_usdt,
+        exchangeRateTRX: rates.rate_trx,
         botUsername: botInfo.username,
         bonusCupDefault: BONUS_CUP_DEFAULT
     });
 });
 
-// --- Métodos de depósito ---
+// --- Métodos de depósito (con moneda y límites) ---
 app.get('/api/deposit-methods', async (req, res) => {
     const { data } = await supabase.from('deposit_methods').select('*').order('id');
     res.json(data || []);
@@ -326,7 +413,7 @@ app.get('/api/deposit-methods/:id', async (req, res) => {
     res.json(data);
 });
 
-// --- Métodos de retiro ---
+// --- Métodos de retiro (con moneda y límites) ---
 app.get('/api/withdraw-methods', async (req, res) => {
     const { data } = await supabase.from('withdraw_methods').select('*').order('id');
     res.json(data || []);
@@ -342,10 +429,10 @@ app.get('/api/play-prices', async (req, res) => {
     res.json(data || []);
 });
 
-// --- Tasa de cambio ---
-app.get('/api/exchange-rate', async (req, res) => {
-    const rate = await getExchangeRate();
-    res.json({ rate });
+// --- Tasas de cambio ---
+app.get('/api/exchange-rates', async (req, res) => {
+    const rates = await getExchangeRates();
+    res.json(rates);
 });
 
 // --- Mínimo depósito (público) ---
@@ -360,14 +447,18 @@ app.get('/api/config/min-withdraw', async (req, res) => {
     res.json({ value });
 });
 
-// --- Números ganadores (últimos 10) ---
+// --- Números ganadores (últimos 10) con formato 123 4567 ---
 app.get('/api/winning-numbers', async (req, res) => {
     const { data } = await supabase
         .from('winning_numbers')
         .select('*')
         .order('published_at', { ascending: false })
         .limit(10);
-    res.json(data || []);
+    const formatted = (data || []).map(w => ({
+        ...w,
+        formatted_number: w.numbers[0].replace(/(\d{3})(\d{4})/, '$1 $2')
+    }));
+    res.json(formatted);
 });
 
 // --- Sesión activa para una lotería y turno específico ---
@@ -398,11 +489,11 @@ app.get('/api/lottery-sessions/:id', async (req, res) => {
     res.json(data);
 });
 
-// --- Solicitud de depósito (con captura) ---
+// --- Solicitud de depósito (con captura, moneda y límites) ---
 app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) => {
-    const { methodId, userId, amount } = req.body;
+    const { methodId, userId, amount, currency } = req.body;
     const file = req.file;
-    if (!methodId || !userId || !file || !amount) {
+    if (!methodId || !userId || !file || !amount || !currency) {
         return res.status(400).json({ error: 'Faltan datos' });
     }
 
@@ -417,20 +508,14 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         return res.status(400).json({ error: 'Método no encontrado' });
     }
 
-    const { usd, cup } = parseAmount(amount);
-    const currency = method.currency || 'CUP';
-    if (currency === 'USD' && cup > 0) {
-        return res.status(400).json({ error: 'Este método es en USD. Usa formato "10 usd".' });
-    }
-    if (currency === 'CUP' && usd > 0) {
-        return res.status(400).json({ error: 'Este método es en CUP. Usa formato "500 cup".' });
+    if (method.currency !== currency) {
+        return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide.` });
     }
 
-    const monto = currency === 'USD' ? usd : cup;
-    if (method.min_amount !== null && monto < method.min_amount) {
+    if (method.min_amount !== null && amount < method.min_amount) {
         return res.status(400).json({ error: `Monto mínimo: ${method.min_amount} ${currency}` });
     }
-    if (method.max_amount !== null && monto > method.max_amount) {
+    if (method.max_amount !== null && amount > method.max_amount) {
         return res.status(400).json({ error: `Monto máximo: ${method.max_amount} ${currency}` });
     }
 
@@ -455,7 +540,8 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
             user_id: parseInt(userId),
             method_id: parseInt(methodId),
             screenshot_url: publicUrl,
-            amount,
+            amount: amount.toString(),
+            currency,
             status: 'pending'
         })
         .select()
@@ -469,7 +555,7 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         try {
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                 chat_id: adminId,
-                text: `📥 <b>Nueva solicitud de DEPÓSITO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n🏦 Método: ${method.name} (${currency})\n💰 Monto: ${amount}\n📎 <a href="${publicUrl}">Ver captura</a>\n🆔 Solicitud: ${request.id}`,
+                text: `📥 <b>Nueva solicitud de DEPÓSITO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n🏦 Método: ${method.name} (${currency})\n💰 Monto: ${amount} ${currency}\n📎 <a href="${publicUrl}">Ver captura</a>\n🆔 Solicitud: ${request.id}`,
                 parse_mode: 'HTML',
                 reply_markup: {
                     inline_keyboard: [[
@@ -486,10 +572,10 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
     res.json({ success: true, requestId: request.id });
 });
 
-// --- Solicitud de retiro (ahora soporta CUP y USD según método) ---
+// --- Solicitud de retiro (con moneda y límites) ---
 app.post('/api/withdraw-requests', async (req, res) => {
-    const { methodId, amount, currency, userId } = req.body;
-    if (!methodId || !amount || !currency || !userId) {
+    const { methodId, amount, currency, userId, accountInfo } = req.body;
+    if (!methodId || !amount || !currency || !userId || !accountInfo) {
         return res.status(400).json({ error: 'Faltan datos' });
     }
 
@@ -505,10 +591,18 @@ app.post('/api/withdraw-requests', async (req, res) => {
     }
 
     if (method.currency !== currency) {
-        return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide con la seleccionada.` });
+        return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide.` });
     }
 
-    const balance = currency === 'USD' ? parseFloat(user.usd) : parseFloat(user.cup);
+    // Verificar saldo
+    let balance = 0;
+    switch (currency) {
+        case 'CUP': balance = parseFloat(user.cup); break;
+        case 'USD': balance = parseFloat(user.usd); break;
+        case 'USDT': balance = parseFloat(user.usdt); break;
+        case 'TRX': balance = parseFloat(user.trx); break;
+        case 'MLC': balance = parseFloat(user.mlc); break;
+    }
     if (balance < amount) {
         return res.status(400).json({ error: `Saldo insuficiente en ${currency}` });
     }
@@ -527,7 +621,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
             method_id: parseInt(methodId),
             amount,
             currency,
-            account_info: 'Solicitado vía WebApp',
+            account_info: accountInfo,
             status: 'pending'
         })
         .select()
@@ -539,11 +633,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
 
     // Restar saldo
     const updateData = {};
-    if (currency === 'USD') {
-        updateData.usd = parseFloat(user.usd) - amount;
-    } else {
-        updateData.cup = parseFloat(user.cup) - amount;
-    }
+    updateData[currency.toLowerCase()] = balance - amount;
     await supabase
         .from('users')
         .update({ ...updateData, updated_at: new Date() })
@@ -553,7 +643,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
         try {
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                 chat_id: adminId,
-                text: `📤 <b>Nueva solicitud de RETIRO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n💰 Monto: ${amount} ${currency}\n🏦 Método: ${method.name} (${currency})\n🆔 Solicitud: ${request.id}`,
+                text: `📤 <b>Nueva solicitud de RETIRO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n💰 Monto: ${amount} ${currency}\n🏦 Método: ${method.name} (${currency})\n📞 Cuenta: ${accountInfo}\n🆔 Solicitud: ${request.id}`,
                 parse_mode: 'HTML',
                 reply_markup: {
                     inline_keyboard: [[
@@ -568,10 +658,10 @@ app.post('/api/withdraw-requests', async (req, res) => {
     res.json({ success: true, requestId: request.id });
 });
 
-// --- Transferencia entre usuarios (soporta username) ---
+// --- Transferencia entre usuarios (multi-moneda) ---
 app.post('/api/transfer', async (req, res) => {
-    const { from, to, amount } = req.body;
-    if (!from || !to || !amount || amount <= 0) {
+    const { from, to, amount, currency } = req.body;
+    if (!from || !to || !amount || !currency || amount <= 0) {
         return res.status(400).json({ error: 'Datos inválidos' });
     }
     if (from === to) {
@@ -610,26 +700,44 @@ app.post('/api/transfer', async (req, res) => {
     }
 
     if (!targetUser) {
-        return res.status(404).json({ error: 'Usuario destino no encontrado (verifica el nombre de usuario o ID)' });
+        return res.status(404).json({ error: 'Usuario destino no encontrado' });
     }
 
-    if (parseInt(from) === targetUserId) {
-        return res.status(400).json({ error: 'No puedes transferirte a ti mismo' });
+    // Verificar saldo origen
+    let balanceFrom = 0;
+    switch (currency) {
+        case 'CUP': balanceFrom = parseFloat(userFrom.cup); break;
+        case 'USD': balanceFrom = parseFloat(userFrom.usd); break;
+        case 'USDT': balanceFrom = parseFloat(userFrom.usdt); break;
+        case 'TRX': balanceFrom = parseFloat(userFrom.trx); break;
+        case 'MLC': balanceFrom = parseFloat(userFrom.mlc); break;
+        default: return res.status(400).json({ error: 'Moneda no soportada' });
     }
-
-    if (parseFloat(userFrom.usd) < amount) {
-        return res.status(400).json({ error: 'Saldo USD insuficiente' });
+    if (balanceFrom < amount) {
+        return res.status(400).json({ error: `Saldo insuficiente en ${currency}` });
     }
 
     // Realizar transferencia
+    const updateFrom = {};
+    updateFrom[currency.toLowerCase()] = balanceFrom - amount;
     await supabase
         .from('users')
-        .update({ usd: parseFloat(userFrom.usd) - amount, updated_at: new Date() })
+        .update({ ...updateFrom, updated_at: new Date() })
         .eq('telegram_id', from);
 
+    let balanceTo = 0;
+    switch (currency) {
+        case 'CUP': balanceTo = parseFloat(targetUser.cup); break;
+        case 'USD': balanceTo = parseFloat(targetUser.usd); break;
+        case 'USDT': balanceTo = parseFloat(targetUser.usdt); break;
+        case 'TRX': balanceTo = parseFloat(targetUser.trx); break;
+        case 'MLC': balanceTo = parseFloat(targetUser.mlc); break;
+    }
+    const updateTo = {};
+    updateTo[currency.toLowerCase()] = balanceTo + amount;
     await supabase
         .from('users')
-        .update({ usd: parseFloat(targetUser.usd) + amount, updated_at: new Date() })
+        .update({ ...updateTo, updated_at: new Date() })
         .eq('telegram_id', targetUserId);
 
     res.json({ success: true });
@@ -678,36 +786,39 @@ app.post('/api/bets', async (req, res) => {
     const maxUsd = priceData?.max_usd;
 
     for (const item of parsed.items) {
-        if (item.cup > 0) {
-            if (item.cup < minCup) {
+        if (item.currency === 'CUP') {
+            if (item.amount < minCup) {
                 return res.status(400).json({ error: `El monto mínimo para jugadas en CUP es ${minCup} CUP` });
             }
-            if (maxCup !== null && item.cup > maxCup) {
+            if (maxCup !== null && item.amount > maxCup) {
                 return res.status(400).json({ error: `El monto máximo para jugadas en CUP es ${maxCup} CUP` });
             }
-        }
-        if (item.usd > 0) {
-            if (item.usd < minUsd) {
+        } else if (item.currency === 'USD') {
+            if (item.amount < minUsd) {
                 return res.status(400).json({ error: `El monto mínimo para jugadas en USD es ${minUsd} USD` });
             }
-            if (maxUsd !== null && item.usd > maxUsd) {
+            if (maxUsd !== null && item.amount > maxUsd) {
                 return res.status(400).json({ error: `El monto máximo para jugadas en USD es ${maxUsd} USD` });
             }
+        } else {
+            return res.status(400).json({ error: 'Moneda no soportada en apuestas' });
         }
     }
 
     let newUsd = parseFloat(user.usd);
-    let newBonus = parseFloat(user.bonus_usd);
+    let newBonus = parseFloat(user.bonus_cup);
     let newCup = parseFloat(user.cup);
 
     if (totalUSD > 0) {
-        const totalDisponible = newUsd + newBonus;
+        const totalDisponible = newUsd + newBonus / (await getExchangeRateUSD()); // bono en CUP convertido a USD
         if (totalDisponible < totalUSD) {
-            return res.status(400).json({ error: 'Saldo USD (incluyendo bono) insuficiente' });
+            return res.status(400).json({ error: 'Saldo USD (incluyendo bono convertido) insuficiente' });
         }
-        const usarBono = Math.min(newBonus, totalUSD);
-        newBonus -= usarBono;
-        newUsd -= (totalUSD - usarBono);
+        // Usar bono primero
+        const bonoEnUSD = newBonus / (await getExchangeRateUSD());
+        const usarBonoUSD = Math.min(bonoEnUSD, totalUSD);
+        newBonus -= usarBonoUSD * (await getExchangeRateUSD());
+        newUsd -= (totalUSD - usarBonoUSD);
     }
 
     if (totalCUP > 0) {
@@ -721,7 +832,7 @@ app.post('/api/bets', async (req, res) => {
         .from('users')
         .update({
             usd: newUsd,
-            bonus_usd: newBonus,
+            bonus_cup: newBonus,
             cup: newCup,
             updated_at: new Date()
         })
@@ -736,8 +847,6 @@ app.post('/api/bets', async (req, res) => {
             bet_type: betType,
             raw_text: rawText,
             items: parsed.items,
-            cost_usd: totalUSD,
-            cost_cup: totalCUP,
             placed_at: new Date()
         })
         .select()
@@ -785,12 +894,23 @@ app.post('/api/bets/:id/cancel', async (req, res) => {
     }
 
     const user = await getOrCreateUser(parseInt(userId));
-    const newUsd = parseFloat(user.usd) + parseFloat(bet.cost_usd);
-    const newCup = parseFloat(user.cup) + parseFloat(bet.cost_cup);
+    let newCup = parseFloat(user.cup);
+    let newUsd = parseFloat(user.usd);
+    let newBonus = parseFloat(user.bonus_cup);
+
+    // Reembolsar según los items
+    for (const item of bet.items) {
+        if (item.currency === 'CUP') {
+            newCup += item.amount;
+        } else if (item.currency === 'USD') {
+            // Determinar si se usó bono? Es complejo, por simplicidad reembolsamos a USD
+            newUsd += item.amount;
+        }
+    }
 
     await supabase
         .from('users')
-        .update({ usd: newUsd, cup: newCup, updated_at: new Date() })
+        .update({ usd: newUsd, cup: newCup, bonus_cup: newBonus, updated_at: new Date() })
         .eq('telegram_id', userId);
 
     await supabase
@@ -833,8 +953,9 @@ app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
     if (!name || !card || !confirm || !currency) {
         return res.status(400).json({ error: 'Nombre, tarjeta, confirmación y moneda son obligatorios' });
     }
-    if (currency !== 'CUP' && currency !== 'USD') {
-        return res.status(400).json({ error: 'Moneda debe ser CUP o USD' });
+    const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+    if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({ error: 'Moneda no válida' });
     }
     const insertData = {
         name,
@@ -862,8 +983,9 @@ app.put('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
     if (card !== undefined) updateData.card = card;
     if (confirm !== undefined) updateData.confirm = confirm;
     if (currency !== undefined) {
-        if (currency !== 'CUP' && currency !== 'USD') {
-            return res.status(400).json({ error: 'Moneda debe ser CUP o USD' });
+        const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+        if (!validCurrencies.includes(currency)) {
+            return res.status(400).json({ error: 'Moneda no válida' });
         }
         updateData.currency = currency;
     }
@@ -898,8 +1020,9 @@ app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
     if (!name || !card || !currency) {
         return res.status(400).json({ error: 'Nombre, instrucción y moneda son obligatorios' });
     }
-    if (currency !== 'CUP' && currency !== 'USD') {
-        return res.status(400).json({ error: 'Moneda debe ser CUP o USD' });
+    const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+    if (!validCurrencies.includes(currency)) {
+        return res.status(400).json({ error: 'Moneda no válida' });
     }
     const insertData = {
         name,
@@ -927,8 +1050,9 @@ app.put('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
     if (card !== undefined) updateData.card = card;
     if (confirm !== undefined) updateData.confirm = confirm;
     if (currency !== undefined) {
-        if (currency !== 'CUP' && currency !== 'USD') {
-            return res.status(400).json({ error: 'Moneda debe ser CUP o USD' });
+        const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
+        if (!validCurrencies.includes(currency)) {
+            return res.status(400).json({ error: 'Moneda no válida' });
         }
         updateData.currency = currency;
     }
@@ -957,17 +1081,26 @@ app.delete('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => 
     res.json({ success: true });
 });
 
-// --- Actualizar tasa de cambio ---
-app.put('/api/admin/exchange-rate', requireAdmin, async (req, res) => {
+// --- Actualizar tasas de cambio ---
+app.put('/api/admin/exchange-rate/usd', requireAdmin, async (req, res) => {
     const { rate } = req.body;
-    if (!rate || rate <= 0) {
-        return res.status(400).json({ error: 'Tasa inválida' });
-    }
-    await supabase
-        .from('exchange_rate')
-        .update({ rate, updated_at: new Date() })
-        .eq('id', 1);
-    res.json({ success: true, rate });
+    if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
+    await setExchangeRateUSD(rate);
+    res.json({ success: true });
+});
+
+app.put('/api/admin/exchange-rate/usdt', requireAdmin, async (req, res) => {
+    const { rate } = req.body;
+    if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
+    await setExchangeRateUSDT(rate);
+    res.json({ success: true });
+});
+
+app.put('/api/admin/exchange-rate/trx', requireAdmin, async (req, res) => {
+    const { rate } = req.body;
+    if (!rate || rate <= 0) return res.status(400).json({ error: 'Tasa inválida' });
+    await setExchangeRateTRX(rate);
+    res.json({ success: true });
 });
 
 // --- Actualizar precios de una jugada (con mínimos y máximos) ---
@@ -994,33 +1127,23 @@ app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
 // --- Configurar mínimo depósito ---
 app.post('/api/admin/min-deposit', requireAdmin, async (req, res) => {
     const { value } = req.body;
-    if (!value || value <= 0) {
-        return res.status(400).json({ error: 'Valor inválido' });
-    }
-    await supabase
-        .from('app_config')
-        .upsert({ key: 'min_deposit_usd', value: value.toString() }, { onConflict: 'key' });
+    if (!value || value <= 0) return res.status(400).json({ error: 'Valor inválido' });
+    await setMinDepositUSD(value);
     res.json({ success: true });
 });
 
-// --- Configurar mínimo retiro (global) ---
+// --- Configurar mínimo retiro ---
 app.post('/api/admin/min-withdraw', requireAdmin, async (req, res) => {
     const { value } = req.body;
-    if (!value || value <= 0) {
-        return res.status(400).json({ error: 'Valor inválido' });
-    }
-    await supabase
-        .from('app_config')
-        .upsert({ key: 'min_withdraw_usd', value: value.toString() }, { onConflict: 'key' });
+    if (!value || value <= 0) return res.status(400).json({ error: 'Valor inválido' });
+    await setMinWithdrawUSD(value);
     res.json({ success: true });
 });
 
 // --- Obtener sesiones de una fecha específica (admin) ---
 app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { date } = req.query;
-    if (!date) {
-        return res.status(400).json({ error: 'Falta fecha' });
-    }
+    if (!date) return res.status(400).json({ error: 'Falta fecha' });
     const { data } = await supabase
         .from('lottery_sessions')
         .select('*')
@@ -1031,14 +1154,12 @@ app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
 // --- Crear nueva sesión (abrir) con broadcast ---
 app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { lottery, time_slot } = req.body;
-    if (!lottery || !time_slot) {
-        return res.status(400).json({ error: 'Faltan datos' });
-    }
+    if (!lottery || !time_slot) return res.status(400).json({ error: 'Faltan datos' });
 
     const today = moment.tz(TIMEZONE).format('YYYY-MM-DD');
     const endTime = getEndTimeFromSlot(lottery, time_slot);
     if (!endTime) {
-        return res.status(400).json({ error: `La hora de cierre para el turno ${time_slot} ya pasó hoy. No se puede abrir.` });
+        return res.status(400).json({ error: `La hora de cierre para el turno ${time_slot} ya pasó hoy.` });
     }
 
     const { data: existing } = await supabase
@@ -1067,9 +1188,10 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
 
     if (error) return res.status(500).json({ error: error.message });
 
+    const region = regionMap[lottery];
     await broadcastToAllUsers(
         `🎲 <b>¡SESIÓN ABIERTA!</b> 🎲\n\n` +
-        `✨ La región <b>${lottery}</b> acaba de abrir su turno de <b>${time_slot}</b>.\n` +
+        `✨ La región ${region?.emoji || '🎰'} <b>${lottery}</b> acaba de abrir su turno de <b>${time_slot}</b>.\n` +
         `💎 ¡Es tu momento! Realiza tus apuestas y llévate grandes premios.\n\n` +
         `⏰ Cierre: ${moment(endTime).tz(TIMEZONE).format('HH:mm')} (hora Cuba)\n` +
         `🍀 ¡La suerte te espera!`
@@ -1081,12 +1203,8 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
 // --- Cambiar estado de una sesión (abrir/cerrar) con broadcast ---
 app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) => {
     const { sessionId, status } = req.body;
-    if (!sessionId || !status) {
-        return res.status(400).json({ error: 'Faltan datos' });
-    }
-    if (status !== 'open' && status !== 'closed') {
-        return res.status(400).json({ error: 'Estado inválido' });
-    }
+    if (!sessionId || !status) return res.status(400).json({ error: 'Faltan datos' });
+    if (!['open', 'closed'].includes(status)) return res.status(400).json({ error: 'Estado inválido' });
 
     const { data, error } = await supabase
         .from('lottery_sessions')
@@ -1097,13 +1215,14 @@ app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) =>
 
     if (error) return res.status(500).json({ error: error.message });
 
+    const region = regionMap[data.lottery];
     if (status === 'closed') {
         await broadcastToAllUsers(
             `🔴 <b>SESIÓN CERRADA</b>\n\n` +
-            `🎰 <b>${data.lottery}</b> - Turno <b>${data.time_slot}</b>\n` +
+            `🎰 ${region?.emoji || '🎰'} <b>${data.lottery}</b> - Turno <b>${data.time_slot}</b>\n` +
             `📅 Fecha: ${data.date}\n\n` +
             `❌ Ya no se reciben más apuestas.\n` +
-            `🔢 Pronto anunciaremos el número ganador. ¡Muy atento!`
+            `🔢 Pronto anunciaremos el número ganador. ¡Mantente atento!`
         );
     }
 
@@ -1130,9 +1249,7 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
         .eq('id', sessionId)
         .single();
 
-    if (!session) {
-        return res.status(404).json({ error: 'Sesión no encontrada' });
-    }
+    if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
 
     const { data: winning } = await supabase
         .from('winning_numbers')
@@ -1208,8 +1325,8 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
             }
 
             if (ganado) {
-                premioTotalUSD += item.usd * multiplicador;
-                premioTotalCUP += item.cup * multiplicador;
+                if (item.currency === 'USD') premioTotalUSD += item.amount * multiplicador;
+                else if (item.currency === 'CUP') premioTotalCUP += item.amount * multiplicador;
             }
         }
 
@@ -1233,12 +1350,10 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
     res.json({ winners, winning_number: winningStr });
 });
 
-// --- Publicar número ganador (con soporte D/T y broadcast) ---
+// --- Publicar número ganador (con formato y broadcast) ---
 app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
     const { sessionId, winningNumber } = req.body;
-    if (!sessionId || !winningNumber) {
-        return res.status(400).json({ error: 'Faltan datos' });
-    }
+    if (!sessionId || !winningNumber) return res.status(400).json({ error: 'Faltan datos' });
 
     const cleanNumber = winningNumber.replace(/\s+/g, '');
     if (!/^\d{7}$/.test(cleanNumber)) {
@@ -1251,9 +1366,7 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         .eq('id', sessionId)
         .single();
 
-    if (!session) {
-        return res.status(404).json({ error: 'Sesión no encontrada' });
-    }
+    if (!session) return res.status(404).json({ error: 'Sesión no encontrada' });
 
     const { data: existingWin } = await supabase
         .from('winning_numbers')
@@ -1291,9 +1404,7 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
             published_at: new Date()
         });
 
-    if (insertError) {
-        return res.status(500).json({ error: insertError.message });
-    }
+    if (insertError) return res.status(500).json({ error: insertError.message });
 
     const { data: multipliers } = await supabase
         .from('play_prices')
@@ -1306,7 +1417,7 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         .select('*')
         .eq('session_id', sessionId);
 
-    const rate = await getExchangeRate();
+    const rates = await getExchangeRates();
 
     for (const bet of bets || []) {
         let premioTotalUSD = 0;
@@ -1342,8 +1453,8 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
             }
 
             if (ganado) {
-                premioTotalUSD += item.usd * multiplicador;
-                premioTotalCUP += item.cup * multiplicador;
+                if (item.currency === 'USD') premioTotalUSD += item.amount * multiplicador;
+                else if (item.currency === 'CUP') premioTotalCUP += item.amount * multiplicador;
             }
         }
 
@@ -1361,29 +1472,26 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
 
             await supabase
                 .from('users')
-                .update({ usd: newUsd, cup: newCup })
+                .update({ usd: newUsd, cup: newCup, updated_at: new Date() })
                 .eq('telegram_id', bet.user_id);
 
-            const usdEquivalentCup = (premioTotalUSD * rate).toFixed(2);
-            const cupEquivalentUsd = (premioTotalCUP / rate).toFixed(2);
-
+            const formatted = cleanNumber.replace(/(\d{3})(\d{4})/, '$1 $2');
             try {
                 await bot.telegram.sendMessage(bet.user_id,
                     `🎉 <b>¡FELICIDADES! Has ganado</b>\n\n` +
-                    `🔢 Número ganador: <code>${cleanNumber}</code>\n` +
-                    `🎰 ${session.lottery} - ${session.time_slot}\n` +
-                    `💰 Premio: ${premioTotalUSD.toFixed(2)} USD / ${premioTotalCUP.toFixed(2)} CUP\n` +
-                    (premioTotalUSD > 0 ? `   (equivale a ${usdEquivalentCup} CUP aprox.)\n` : '') +
-                    (premioTotalCUP > 0 ? `   (equivale a ${cupEquivalentUsd} USD aprox.)\n` : '') +
-                    `\n✅ El premio ya fue acreditado a tu saldo.`,
+                    `🔢 Número ganador: <code>${formatted}</code>\n` +
+                    `🎰 ${regionMap[session.lottery]?.emoji || '🎰'} ${session.lottery} - ${session.time_slot}\n` +
+                    `💰 Premio: ${premioTotalUSD > 0 ? premioTotalUSD.toFixed(2) + ' USD' : ''} ${premioTotalCUP > 0 ? premioTotalCUP.toFixed(2) + ' CUP' : ''}\n` +
+                    `✅ El premio ya fue acreditado a tu saldo.`,
                     { parse_mode: 'HTML' }
                 );
             } catch (e) {}
         } else {
+            const formatted = cleanNumber.replace(/(\d{3})(\d{4})/, '$1 $2');
             try {
                 await bot.telegram.sendMessage(bet.user_id,
-                    `🔢 <b>Números ganadores de ${session.lottery} (${session.date} - ${session.time_slot})</b>\n\n` +
-                    `Número: <code>${cleanNumber}</code>\n\n` +
+                    `🔢 <b>Números ganadores de ${regionMap[session.lottery]?.emoji || '🎰'} ${session.lottery} (${session.date} - ${session.time_slot})</b>\n\n` +
+                    `Número: <code>${formatted}</code>\n\n` +
                     `😔 No has ganado esta vez. ¡Sigue intentando!`,
                     { parse_mode: 'HTML' }
                 );
@@ -1391,11 +1499,12 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
         }
     }
 
+    const formattedBroadcast = cleanNumber.replace(/(\d{3})(\d{4})/, '$1 $2');
     await broadcastToAllUsers(
         `📢 <b>NÚMERO GANADOR PUBLICADO</b>\n\n` +
-        `🎰 <b>${session.lottery}</b> - Turno <b>${session.time_slot}</b>\n` +
+        `🎰 ${regionMap[session.lottery]?.emoji || '🎰'} <b>${session.lottery}</b> - Turno <b>${session.time_slot}</b>\n` +
         `📅 Fecha: ${session.date}\n` +
-        `🔢 Número: <code>${cleanNumber}</code>\n\n` +
+        `🔢 Número: <code>${formattedBroadcast}</code>\n\n` +
         `💬 Revisa tu historial para ver si has ganado. ¡Suerte en la próxima!`
     );
 
