@@ -1,8 +1,8 @@
 // ==============================
 // backend.js - API REST + Bot de Telegram (UNIFICADO)
-// Versión con soporte multi-moneda (CUP, USD, USDT, TRX, MLC)
-// Tasas configurables por admin, límites en métodos y jugadas.
-// Incluye emojis regionales y formato de número ganador.
+// Versión simplificada: solo saldos CUP y USD en usuarios
+// Métodos pueden ser en cualquier moneda, conversión automática al aprobar
+// Incluye todos los endpoints de admin, apuestas, transferencias, etc.
 // ==============================
 
 require('dotenv').config();
@@ -141,7 +141,7 @@ async function convertFromCUP(amountCUP, targetCurrency) {
     }
 }
 
-// ========== FUNCIÓN GETORCREATEUSER (con nuevos campos) ==========
+// ========== FUNCIÓN GETORCREATEUSER (solo CUP/USD) ==========
 async function getOrCreateUser(telegramId, firstName = 'Jugador', username = null) {
     let { data: user } = await supabase
         .from('users')
@@ -158,16 +158,12 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador', username = nul
                 username: username,
                 bonus_cup: BONUS_CUP_DEFAULT,
                 cup: 0,
-                usd: 0,
-                usdt: 0,
-                trx: 0,
-                mlc: 0
+                usd: 0
             })
             .select()
             .single();
         user = newUser;
 
-        // Enviar mensaje de bienvenida con el bono
         try {
             await bot.telegram.sendMessage(telegramId,
                 `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
@@ -177,7 +173,6 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador', username = nul
             );
         } catch (e) {}
     } else {
-        // Actualizar username si ha cambiado
         if (username && user.username !== username) {
             await supabase
                 .from('users')
@@ -229,7 +224,7 @@ function parseAmountWithCurrency(text) {
     };
 }
 
-// ========== FUNCIONES DE PARSEO DE APUESTAS (con soporte de moneda) ==========
+// ========== FUNCIONES DE PARSEO DE APUESTAS (sin cambios) ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return [];
@@ -478,7 +473,7 @@ app.get('/api/lottery-sessions/active', async (req, res) => {
     res.json(data);
 });
 
-// --- Obtener sesión por ID (para verificar si está abierta) ---
+// --- Obtener sesión por ID ---
 app.get('/api/lottery-sessions/:id', async (req, res) => {
     const { id } = req.params;
     const { data } = await supabase
@@ -489,7 +484,7 @@ app.get('/api/lottery-sessions/:id', async (req, res) => {
     res.json(data);
 });
 
-// --- Solicitud de depósito (con captura, moneda y límites) ---
+// --- Solicitud de depósito (con captura) ---
 app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) => {
     const { methodId, userId, amount, currency } = req.body;
     const file = req.file;
@@ -512,10 +507,15 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide.` });
     }
 
-    if (method.min_amount !== null && amount < method.min_amount) {
+    const parsed = parseAmountWithCurrency(amount);
+    if (!parsed || parsed.currency !== currency) {
+        return res.status(400).json({ error: 'Formato de monto inválido' });
+    }
+
+    if (method.min_amount !== null && parsed.amount < method.min_amount) {
         return res.status(400).json({ error: `Monto mínimo: ${method.min_amount} ${currency}` });
     }
-    if (method.max_amount !== null && amount > method.max_amount) {
+    if (method.max_amount !== null && parsed.amount > method.max_amount) {
         return res.status(400).json({ error: `Monto máximo: ${method.max_amount} ${currency}` });
     }
 
@@ -540,7 +540,7 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
             user_id: parseInt(userId),
             method_id: parseInt(methodId),
             screenshot_url: publicUrl,
-            amount: amount.toString(),
+            amount: amount,
             currency,
             status: 'pending'
         })
@@ -555,7 +555,7 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
         try {
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                 chat_id: adminId,
-                text: `📥 <b>Nueva solicitud de DEPÓSITO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n🏦 Método: ${method.name} (${currency})\n💰 Monto: ${amount} ${currency}\n📎 <a href="${publicUrl}">Ver captura</a>\n🆔 Solicitud: ${request.id}`,
+                text: `📥 <b>Nueva solicitud de DEPÓSITO</b> (WebApp)\n👤 Usuario: ${user.first_name} (${userId})\n🏦 Método: ${method.name} (${currency})\n💰 Monto: ${amount}\n📎 <a href="${publicUrl}">Ver captura</a>\n🆔 Solicitud: ${request.id}`,
                 parse_mode: 'HTML',
                 reply_markup: {
                     inline_keyboard: [[
@@ -572,7 +572,7 @@ app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) 
     res.json({ success: true, requestId: request.id });
 });
 
-// --- Solicitud de retiro (con moneda y límites) ---
+// --- Solicitud de retiro ---
 app.post('/api/withdraw-requests', async (req, res) => {
     const { methodId, amount, currency, userId, accountInfo } = req.body;
     if (!methodId || !amount || !currency || !userId || !accountInfo) {
@@ -594,17 +594,24 @@ app.post('/api/withdraw-requests', async (req, res) => {
         return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide.` });
     }
 
-    // Verificar saldo
-    let balance = 0;
-    switch (currency) {
-        case 'CUP': balance = parseFloat(user.cup); break;
-        case 'USD': balance = parseFloat(user.usd); break;
-        case 'USDT': balance = parseFloat(user.usdt); break;
-        case 'TRX': balance = parseFloat(user.trx); break;
-        case 'MLC': balance = parseFloat(user.mlc); break;
+    // Verificar saldo disponible según moneda
+    let saldoSuficiente = false;
+    let saldoMensaje = '';
+    if (currency === 'CUP') {
+        if (parseFloat(user.cup) >= amount) saldoSuficiente = true;
+        else saldoMensaje = `Saldo CUP insuficiente. Disponible: ${parseFloat(user.cup).toFixed(2)} CUP`;
+    } else if (currency === 'USD') {
+        if (parseFloat(user.usd) >= amount) saldoSuficiente = true;
+        else saldoMensaje = `Saldo USD insuficiente. Disponible: ${parseFloat(user.usd).toFixed(2)} USD`;
+    } else {
+        // Otras monedas: se debitará de CUP al aprobar, pero verificamos que tenga CUP suficiente
+        const cupNeeded = await convertToCUP(amount, currency);
+        if (parseFloat(user.cup) >= cupNeeded) saldoSuficiente = true;
+        else saldoMensaje = `Saldo CUP insuficiente. Necesitas ${cupNeeded.toFixed(2)} CUP.`;
     }
-    if (balance < amount) {
-        return res.status(400).json({ error: `Saldo insuficiente en ${currency}` });
+
+    if (!saldoSuficiente) {
+        return res.status(400).json({ error: saldoMensaje });
     }
 
     if (method.min_amount !== null && amount < method.min_amount) {
@@ -631,14 +638,6 @@ app.post('/api/withdraw-requests', async (req, res) => {
         return res.status(500).json({ error: 'Error al crear solicitud' });
     }
 
-    // Restar saldo
-    const updateData = {};
-    updateData[currency.toLowerCase()] = balance - amount;
-    await supabase
-        .from('users')
-        .update({ ...updateData, updated_at: new Date() })
-        .eq('telegram_id', userId);
-
     for (const adminId of ADMIN_IDS) {
         try {
             await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -658,26 +657,25 @@ app.post('/api/withdraw-requests', async (req, res) => {
     res.json({ success: true, requestId: request.id });
 });
 
-// --- Transferencia entre usuarios (multi-moneda) ---
+// --- Transferencia entre usuarios (solo CUP y USD) ---
 app.post('/api/transfer', async (req, res) => {
     const { from, to, amount, currency } = req.body;
     if (!from || !to || !amount || !currency || amount <= 0) {
         return res.status(400).json({ error: 'Datos inválidos' });
     }
+    if (!['CUP', 'USD'].includes(currency)) {
+        return res.status(400).json({ error: 'Solo se permite transferir CUP o USD' });
+    }
     if (from === to) {
         return res.status(400).json({ error: 'No puedes transferirte a ti mismo' });
     }
 
-    // Obtener usuario origen
     const userFrom = await getOrCreateUser(parseInt(from));
-    if (!userFrom) {
-        return res.status(404).json({ error: 'Usuario origen no encontrado' });
-    }
+    if (!userFrom) return res.status(404).json({ error: 'Usuario origen no encontrado' });
 
-    // Buscar usuario destino: puede ser ID numérico o username (con o sin @)
+    // Buscar usuario destino
     let targetUserId = null;
     let targetUser = null;
-
     if (!isNaN(to) && typeof to === 'number' || !isNaN(parseInt(to))) {
         targetUserId = parseInt(to);
         const { data } = await supabase
@@ -698,52 +696,46 @@ app.post('/api/transfer', async (req, res) => {
             targetUserId = data.telegram_id;
         }
     }
-
     if (!targetUser) {
         return res.status(404).json({ error: 'Usuario destino no encontrado' });
     }
 
     // Verificar saldo origen
-    let balanceFrom = 0;
-    switch (currency) {
-        case 'CUP': balanceFrom = parseFloat(userFrom.cup); break;
-        case 'USD': balanceFrom = parseFloat(userFrom.usd); break;
-        case 'USDT': balanceFrom = parseFloat(userFrom.usdt); break;
-        case 'TRX': balanceFrom = parseFloat(userFrom.trx); break;
-        case 'MLC': balanceFrom = parseFloat(userFrom.mlc); break;
-        default: return res.status(400).json({ error: 'Moneda no soportada' });
-    }
-    if (balanceFrom < amount) {
-        return res.status(400).json({ error: `Saldo insuficiente en ${currency}` });
+    if (currency === 'CUP') {
+        if (parseFloat(userFrom.cup) < amount) {
+            return res.status(400).json({ error: 'Saldo CUP insuficiente' });
+        }
+    } else {
+        if (parseFloat(userFrom.usd) < amount) {
+            return res.status(400).json({ error: 'Saldo USD insuficiente' });
+        }
     }
 
     // Realizar transferencia
-    const updateFrom = {};
-    updateFrom[currency.toLowerCase()] = balanceFrom - amount;
-    await supabase
-        .from('users')
-        .update({ ...updateFrom, updated_at: new Date() })
-        .eq('telegram_id', from);
-
-    let balanceTo = 0;
-    switch (currency) {
-        case 'CUP': balanceTo = parseFloat(targetUser.cup); break;
-        case 'USD': balanceTo = parseFloat(targetUser.usd); break;
-        case 'USDT': balanceTo = parseFloat(targetUser.usdt); break;
-        case 'TRX': balanceTo = parseFloat(targetUser.trx); break;
-        case 'MLC': balanceTo = parseFloat(targetUser.mlc); break;
+    if (currency === 'CUP') {
+        await supabase
+            .from('users')
+            .update({ cup: parseFloat(userFrom.cup) - amount, updated_at: new Date() })
+            .eq('telegram_id', from);
+        await supabase
+            .from('users')
+            .update({ cup: parseFloat(targetUser.cup) + amount, updated_at: new Date() })
+            .eq('telegram_id', targetUserId);
+    } else {
+        await supabase
+            .from('users')
+            .update({ usd: parseFloat(userFrom.usd) - amount, updated_at: new Date() })
+            .eq('telegram_id', from);
+        await supabase
+            .from('users')
+            .update({ usd: parseFloat(targetUser.usd) + amount, updated_at: new Date() })
+            .eq('telegram_id', targetUserId);
     }
-    const updateTo = {};
-    updateTo[currency.toLowerCase()] = balanceTo + amount;
-    await supabase
-        .from('users')
-        .update({ ...updateTo, updated_at: new Date() })
-        .eq('telegram_id', targetUserId);
 
     res.json({ success: true });
 });
 
-// --- Registro de apuestas (con items y verificación de sesión y límites) ---
+// --- Registro de apuestas ---
 app.post('/api/bets', async (req, res) => {
     const { userId, lottery, betType, rawText, sessionId } = req.body;
     if (!userId || !lottery || !betType || !rawText) {
@@ -765,13 +757,13 @@ app.post('/api/bets', async (req, res) => {
     const user = await getOrCreateUser(parseInt(userId));
     const parsed = parseBetMessage(rawText, betType);
     if (!parsed.ok) {
-        return res.status(400).json({ error: 'No se pudo interpretar la apuesta. Verifica el formato.' });
+        return res.status(400).json({ error: 'No se pudo interpretar la apuesta' });
     }
 
     const totalUSD = parsed.totalUSD;
     const totalCUP = parsed.totalCUP;
     if (totalUSD === 0 && totalCUP === 0) {
-        return res.status(400).json({ error: 'Debes especificar un monto válido (USD o CUP)' });
+        return res.status(400).json({ error: 'Debes especificar un monto válido' });
     }
 
     const { data: priceData } = await supabase
@@ -788,20 +780,18 @@ app.post('/api/bets', async (req, res) => {
     for (const item of parsed.items) {
         if (item.currency === 'CUP') {
             if (item.amount < minCup) {
-                return res.status(400).json({ error: `El monto mínimo para jugadas en CUP es ${minCup} CUP` });
+                return res.status(400).json({ error: `Mínimo en CUP: ${minCup}` });
             }
             if (maxCup !== null && item.amount > maxCup) {
-                return res.status(400).json({ error: `El monto máximo para jugadas en CUP es ${maxCup} CUP` });
+                return res.status(400).json({ error: `Máximo en CUP: ${maxCup}` });
             }
         } else if (item.currency === 'USD') {
             if (item.amount < minUsd) {
-                return res.status(400).json({ error: `El monto mínimo para jugadas en USD es ${minUsd} USD` });
+                return res.status(400).json({ error: `Mínimo en USD: ${minUsd}` });
             }
             if (maxUsd !== null && item.amount > maxUsd) {
-                return res.status(400).json({ error: `El monto máximo para jugadas en USD es ${maxUsd} USD` });
+                return res.status(400).json({ error: `Máximo en USD: ${maxUsd}` });
             }
-        } else {
-            return res.status(400).json({ error: 'Moneda no soportada en apuestas' });
         }
     }
 
@@ -810,11 +800,10 @@ app.post('/api/bets', async (req, res) => {
     let newCup = parseFloat(user.cup);
 
     if (totalUSD > 0) {
-        const totalDisponible = newUsd + newBonus / (await getExchangeRateUSD()); // bono en CUP convertido a USD
+        const totalDisponible = newUsd + newBonus / (await getExchangeRateUSD());
         if (totalDisponible < totalUSD) {
-            return res.status(400).json({ error: 'Saldo USD (incluyendo bono convertido) insuficiente' });
+            return res.status(400).json({ error: 'Saldo USD insuficiente' });
         }
-        // Usar bono primero
         const bonoEnUSD = newBonus / (await getExchangeRateUSD());
         const usarBonoUSD = Math.min(bonoEnUSD, totalUSD);
         newBonus -= usarBonoUSD * (await getExchangeRateUSD());
@@ -861,14 +850,11 @@ app.post('/api/bets', async (req, res) => {
     res.json({ success: true, bet, updatedUser });
 });
 
-// --- Cancelar una jugada (reembolso) ---
+// --- Cancelar jugada ---
 app.post('/api/bets/:id/cancel', async (req, res) => {
     const { id } = req.params;
     const { userId } = req.body;
-
-    if (!userId) {
-        return res.status(400).json({ error: 'Falta userId' });
-    }
+    if (!userId) return res.status(400).json({ error: 'Falta userId' });
 
     const { data: bet } = await supabase
         .from('bets')
@@ -877,9 +863,7 @@ app.post('/api/bets/:id/cancel', async (req, res) => {
         .eq('user_id', userId)
         .single();
 
-    if (!bet) {
-        return res.status(404).json({ error: 'Jugada no encontrada' });
-    }
+    if (!bet) return res.status(404).json({ error: 'Jugada no encontrada' });
 
     if (bet.session_id) {
         const { data: session } = await supabase
@@ -887,9 +871,8 @@ app.post('/api/bets/:id/cancel', async (req, res) => {
             .select('status')
             .eq('id', bet.session_id)
             .single();
-
         if (!session || session.status !== 'open') {
-            return res.status(400).json({ error: 'No se puede cancelar: la sesión ya está cerrada' });
+            return res.status(400).json({ error: 'No se puede cancelar: sesión cerrada' });
         }
     }
 
@@ -898,13 +881,11 @@ app.post('/api/bets/:id/cancel', async (req, res) => {
     let newUsd = parseFloat(user.usd);
     let newBonus = parseFloat(user.bonus_cup);
 
-    // Reembolsar según los items
     for (const item of bet.items) {
         if (item.currency === 'CUP') {
             newCup += item.amount;
         } else if (item.currency === 'USD') {
-            // Determinar si se usó bono? Es complejo, por simplicidad reembolsamos a USD
-            newUsd += item.amount;
+            newUsd += item.amount; // Simplificación: no se recupera bono
         }
     }
 
@@ -922,7 +903,7 @@ app.post('/api/bets/:id/cancel', async (req, res) => {
     res.json({ success: true, updatedUser });
 });
 
-// --- Historial de apuestas del usuario ---
+// --- Historial de apuestas ---
 app.get('/api/user/:userId/bets', async (req, res) => {
     const { userId } = req.params;
     const limit = parseInt(req.query.limit) || 20;
@@ -947,11 +928,11 @@ app.get('/api/user/:userId/referrals/count', async (req, res) => {
 
 // ========== ENDPOINTS DE ADMIN ==========
 
-// --- Añadir método de depósito (con currency y límites) ---
+// --- Añadir método de depósito ---
 app.post('/api/admin/deposit-methods', requireAdmin, async (req, res) => {
     const { name, card, confirm, currency, min_amount, max_amount } = req.body;
     if (!name || !card || !confirm || !currency) {
-        return res.status(400).json({ error: 'Nombre, tarjeta, confirmación y moneda son obligatorios' });
+        return res.status(400).json({ error: 'Faltan campos obligatorios' });
     }
     const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
     if (!validCurrencies.includes(currency)) {
@@ -984,9 +965,7 @@ app.put('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
     if (confirm !== undefined) updateData.confirm = confirm;
     if (currency !== undefined) {
         const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
-        if (!validCurrencies.includes(currency)) {
-            return res.status(400).json({ error: 'Moneda no válida' });
-        }
+        if (!validCurrencies.includes(currency)) return res.status(400).json({ error: 'Moneda no válida' });
         updateData.currency = currency;
     }
     if (min_amount !== undefined) updateData.min_amount = min_amount === 0 ? null : min_amount;
@@ -1014,11 +993,11 @@ app.delete('/api/admin/deposit-methods/:id', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Añadir método de retiro (con currency y límites) ---
+// --- Añadir método de retiro ---
 app.post('/api/admin/withdraw-methods', requireAdmin, async (req, res) => {
     const { name, card, confirm, currency, min_amount, max_amount } = req.body;
     if (!name || !card || !currency) {
-        return res.status(400).json({ error: 'Nombre, instrucción y moneda son obligatorios' });
+        return res.status(400).json({ error: 'Nombre, instrucción y moneda obligatorios' });
     }
     const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
     if (!validCurrencies.includes(currency)) {
@@ -1051,9 +1030,7 @@ app.put('/api/admin/withdraw-methods/:id', requireAdmin, async (req, res) => {
     if (confirm !== undefined) updateData.confirm = confirm;
     if (currency !== undefined) {
         const validCurrencies = ['CUP', 'USD', 'USDT', 'TRX', 'MLC'];
-        if (!validCurrencies.includes(currency)) {
-            return res.status(400).json({ error: 'Moneda no válida' });
-        }
+        if (!validCurrencies.includes(currency)) return res.status(400).json({ error: 'Moneda no válida' });
         updateData.currency = currency;
     }
     if (min_amount !== undefined) updateData.min_amount = min_amount === 0 ? null : min_amount;
@@ -1103,13 +1080,11 @@ app.put('/api/admin/exchange-rate/trx', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Actualizar precios de una jugada (con mínimos y máximos) ---
+// --- Actualizar precios de jugada ---
 app.put('/api/admin/play-prices/:betType', requireAdmin, async (req, res) => {
     const { betType } = req.params;
-    const { amount_cup, amount_usd, payout_multiplier, min_cup, min_usd, max_cup, max_usd } = req.body;
+    const { payout_multiplier, min_cup, min_usd, max_cup, max_usd } = req.body;
     const updateData = { updated_at: new Date() };
-    if (amount_cup !== undefined) updateData.amount_cup = amount_cup;
-    if (amount_usd !== undefined) updateData.amount_usd = amount_usd;
     if (payout_multiplier !== undefined) updateData.payout_multiplier = payout_multiplier;
     if (min_cup !== undefined) updateData.min_cup = min_cup;
     if (min_usd !== undefined) updateData.min_usd = min_usd;
@@ -1140,7 +1115,7 @@ app.post('/api/admin/min-withdraw', requireAdmin, async (req, res) => {
     res.json({ success: true });
 });
 
-// --- Obtener sesiones de una fecha específica (admin) ---
+// --- Obtener sesiones de una fecha ---
 app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { date } = req.query;
     if (!date) return res.status(400).json({ error: 'Falta fecha' });
@@ -1151,7 +1126,7 @@ app.get('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     res.json(data || []);
 });
 
-// --- Crear nueva sesión (abrir) con broadcast ---
+// --- Crear nueva sesión ---
 app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     const { lottery, time_slot } = req.body;
     if (!lottery || !time_slot) return res.status(400).json({ error: 'Faltan datos' });
@@ -1200,7 +1175,7 @@ app.post('/api/admin/lottery-sessions', requireAdmin, async (req, res) => {
     res.json(data);
 });
 
-// --- Cambiar estado de una sesión (abrir/cerrar) con broadcast ---
+// --- Cambiar estado de sesión ---
 app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) => {
     const { sessionId, status } = req.body;
     if (!sessionId || !status) return res.status(400).json({ error: 'Faltan datos' });
@@ -1229,7 +1204,7 @@ app.post('/api/admin/lottery-sessions/toggle', requireAdmin, async (req, res) =>
     res.json(data);
 });
 
-// --- Obtener sesiones cerradas (para publicar ganadores) ---
+// --- Obtener sesiones cerradas ---
 app.get('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) => {
     const { data } = await supabase
         .from('lottery_sessions')
@@ -1239,7 +1214,7 @@ app.get('/api/admin/lottery-sessions/closed', requireAdmin, async (req, res) => 
     res.json(data || []);
 });
 
-// --- Obtener ganadores de una sesión (con soporte D/T) ---
+// --- Obtener ganadores de una sesión ---
 app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (req, res) => {
     const { sessionId } = req.params;
 
@@ -1260,7 +1235,7 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
         .maybeSingle();
 
     if (!winning) {
-        return res.json({ winners: [], message: 'Esta sesión aún no tiene número ganador publicado' });
+        return res.json({ winners: [], message: 'Aún no hay número ganador' });
     }
 
     const winningStr = winning.numbers[0];
@@ -1350,7 +1325,7 @@ app.get('/api/admin/winning-numbers/:sessionId/winners', requireAdmin, async (re
     res.json({ winners, winning_number: winningStr });
 });
 
-// --- Publicar número ganador (con formato y broadcast) ---
+// --- Publicar número ganador ---
 app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
     const { sessionId, winningNumber } = req.body;
     if (!sessionId || !winningNumber) return res.status(400).json({ error: 'Faltan datos' });
@@ -1465,10 +1440,8 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
                 .eq('telegram_id', bet.user_id)
                 .single();
 
-            let newUsd = parseFloat(user.usd);
-            let newCup = parseFloat(user.cup);
-            if (premioTotalUSD > 0) newUsd += premioTotalUSD;
-            if (premioTotalCUP > 0) newCup += premioTotalCUP;
+            let newUsd = parseFloat(user.usd) + premioTotalUSD;
+            let newCup = parseFloat(user.cup) + premioTotalCUP;
 
             await supabase
                 .from('users')
