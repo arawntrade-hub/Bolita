@@ -501,8 +501,14 @@ bot.use(async (ctx, next) => {
             const firstName = ctx.from.first_name || 'Jugador';
             const username = ctx.from.username || null;
             ctx.dbUser = await getUser(uid, firstName, username);
+            if (!ctx.dbUser) {
+                console.error('getUser returned null for', uid);
+                // Fallback para evitar errores
+                ctx.dbUser = { cup: 0, usd: 0, bonus_cup: 0 };
+            }
         } catch (e) {
             console.error('Error cargando usuario:', e);
+            ctx.dbUser = { cup: 0, usd: 0, bonus_cup: 0 };
         }
     }
     return next();
