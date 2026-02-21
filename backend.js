@@ -141,13 +141,13 @@ async function convertFromCUP(amountCUP, targetCurrency) {
     }
 }
 
-// ========== FUNCIÓN GETORCREATEUSER (solo CUP/USD) ==========
+// ========== FUNCIÓN GETORCREATEUSER (solo CUP/USD) - SIN MENSAJE DE BIENVENIDA ==========
 async function getOrCreateUser(telegramId, firstName = 'Jugador', username = null) {
     let { data: user } = await supabase
         .from('users')
         .select('*')
         .eq('telegram_id', telegramId)
-        .single();
+        .maybeSingle();
 
     if (!user) {
         const { data: newUser } = await supabase
@@ -163,15 +163,7 @@ async function getOrCreateUser(telegramId, firstName = 'Jugador', username = nul
             .select()
             .single();
         user = newUser;
-
-        try {
-            await bot.telegram.sendMessage(telegramId,
-                `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
-                `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
-                `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {}
+        // El mensaje de bienvenida se envía solo en el bot, no aquí
     } else {
         if (username && user.username !== username) {
             await supabase
