@@ -9,6 +9,8 @@
 // - Notificaciones de sesiones y números ganadores
 // - Horarios de retiros (10:00 PM - 11:30 PM hora Cuba)
 // - Emojis regionales en números ganadores
+// - Corrección de NaN en bono
+// - Retiros cripto con campos separados (wallet + red)
 // ==============================
 
 require('dotenv').config();
@@ -582,9 +584,9 @@ bot.command('jugar', async (ctx) => {
 bot.command('mi_dinero', async (ctx) => {
     const user = ctx.dbUser;
     const rate = await getExchangeRateUSD();
-    const cup = parseFloat(user.cup);
-    const usd = parseFloat(user.usd);
-    const bonusCup = parseFloat(user.bonus_cup);
+    const cup = parseFloat(user.cup) || 0;
+    const usd = parseFloat(user.usd) || 0;
+    const bonusCup = parseFloat(user.bonus_cup) || 0;
     const cupToUsd = (cup / rate).toFixed(2);
     const usdToCup = (usd * rate).toFixed(2);
 
@@ -820,9 +822,9 @@ bot.action(/type_(.+)/, async (ctx) => {
 bot.action('my_money', async (ctx) => {
     const user = ctx.dbUser;
     const rate = await getExchangeRateUSD();
-    const cup = parseFloat(user.cup);
-    const usd = parseFloat(user.usd);
-    const bonusCup = parseFloat(user.bonus_cup);
+    const cup = parseFloat(user.cup) || 0;
+    const usd = parseFloat(user.usd) || 0;
+    const bonusCup = parseFloat(user.bonus_cup) || 0;
     const cupToUsd = (cup / rate).toFixed(2);
     const usdToCup = (usd * rate).toFixed(2);
 
@@ -877,14 +879,14 @@ bot.action(/dep_(\d+)/, async (ctx) => {
 
     let extraInstructions = '';
     if (method.currency === 'USDT' || method.currency === 'TRX') {
-        extraInstructions = `\n\n🔐 <b>Importante:</b>\n- Envía el monto exacto en ${method.currency} a la dirección indicada.\n- Asegúrate de usar la red correcta: ${method.card.includes('TRC20') ? 'TRC-20' : method.card.includes('BEP20') ? 'BEP-20' : 'la red especificada'}.\n- La captura debe mostrar claramente el hash de la transacción (TXID) y el monto.`;
+        extraInstructions = `\n\n🔐 <b>Importante:</b>\n- Envía el monto exacto en ${method.currency} a la dirección indicada.\n- Asegúrate de usar la red correcta: ${method.confirm.includes('TRC20') ? 'TRC-20' : method.confirm.includes('BEP20') ? 'BEP-20' : method.confirm || 'la red especificada'}.\n- La captura debe mostrar claramente el hash de la transacción (TXID) y el monto.`;
     }
 
     await safeEdit(ctx,
         `🧾 <b>${escapeHTML(method.name)}</b>\n` +
         `Moneda: ${method.currency}\n` +
         `Datos: <code>${escapeHTML(method.card)}</code>\n` +
-        `Confirmar: <code>${escapeHTML(method.confirm)}</code>\n${extraInstructions}\n\n` +
+        `Confirmar / Red: <code>${escapeHTML(method.confirm)}</code>\n${extraInstructions}\n\n` +
         `📸 <b>Ahora, por favor, envía una captura de pantalla de la transferencia que realizaste.</b>\n` +
         `(Asegúrate de que se vea claramente el monto, la moneda y, para cripto, el hash)`,
         null
@@ -953,15 +955,24 @@ bot.action(/wit_(\d+)/, async (ctx) => {
     let saldoEnMoneda = 0;
     let mensajeSaldo = '';
     if (method.currency === 'CUP') {
-        saldoEnMoneda = parseFloat(user.cup);
+        saldoEnMoneda = parseFloat(user.cup) || 0;
         mensajeSaldo = `🇨🇺 CUP real: ${saldoEnMoneda.toFixed(2)}`;
     } else if (method.currency === 'USD') {
-        saldoEnMoneda = parseFloat(user.usd);
+        saldoEnMoneda = parseFloat(user.usd) || 0;
         mensajeSaldo = `💵 USD real: ${saldoEnMoneda.toFixed(2)}`;
     } else {
-        const cupBalance = parseFloat(user.cup);
+        const cupBalance = parseFloat(user.cup) || 0;
         const equivalente = await convertFromCUP(cupBalance, method.currency);
         mensajeSaldo = `💰 Tienes ${cupBalance.toFixed(2)} CUP (equivalente a ${equivalente.toFixed(2)} ${method.currency})`;
+    }
+
+    let instruccionesAdicionales = '';
+    if (method.currency === 'USDT' || method.currency === 'TRX') {
+        instruccionesAdicionales = `\n\n🔐 <b>Para retiros en ${method.currency}:</b>\n` +
+            `- Después de confirmar el monto, te pediré por separado:\n` +
+            `   • Dirección de wallet\n` +
+            `   • Red (ej: TRC-20 para USDT, sugerida: ${method.confirm !== 'ninguno' ? method.confirm : 'la que corresponda'})\n` +
+            `- Asegúrate de usar la red correcta para evitar pérdidas.`;
     }
 
     await safeEdit(ctx,
@@ -971,8 +982,8 @@ bot.action(/wit_(\d+)/, async (ctx) => {
         `⏳ <b>Mínimo de retiro:</b> ${minWithdrawCUP} CUP (equivalente a ${minWithdrawUSD} USD).\n` +
         (method.min_amount ? `📉 Límite mínimo: ${method.min_amount} ${method.currency}\n` : '') +
         (method.max_amount ? `📈 Límite máximo: ${method.max_amount} ${method.currency}\n` : '') +
-        `\nPor favor, escribe el <b>monto que deseas retirar</b> en ${method.currency} (ej: <code>500</code> para 500 ${method.currency}).\n` +
-        (method.currency === 'USDT' || method.currency === 'TRX' ? `\n🔐 Recuerda proporcionar tu dirección de wallet y la red.` : ''),
+        `\nPor favor, escribe el <b>monto que deseas retirar</b> en ${method.currency} (ej: <code>500</code> para 500 ${method.currency}).` +
+        instruccionesAdicionales,
         null
     );
 });
@@ -1309,7 +1320,7 @@ bot.action(/edit_dep_(\d+)/, async (ctx) => {
         [Markup.button.callback('✏️ Nombre', 'edit_field_name')],
         [Markup.button.callback('✏️ Moneda', 'edit_field_currency')],
         [Markup.button.callback('✏️ Datos (card)', 'edit_field_card')],
-        [Markup.button.callback('✏️ Confirmar', 'edit_field_confirm')],
+        [Markup.button.callback('✏️ Confirmar / Red', 'edit_field_confirm')],
         [Markup.button.callback('✏️ Límite mínimo', 'edit_field_min_amount')],
         [Markup.button.callback('✏️ Límite máximo', 'edit_field_max_amount')],
         [Markup.button.callback('◀ Cancelar', 'admin_panel')]
@@ -1320,7 +1331,7 @@ bot.action(/edit_dep_(\d+)/, async (ctx) => {
         `📛 Nombre: ${escapeHTML(method.name)}\n` +
         `💱 Moneda: ${method.currency}\n` +
         `💳 Datos: ${escapeHTML(method.card)}\n` +
-        `✅ Confirmar: ${escapeHTML(method.confirm)}\n` +
+        `✅ Confirmar/Red: ${escapeHTML(method.confirm)}\n` +
         `📉 Mín: ${method.min_amount !== null ? method.min_amount : '-'}\n` +
         `📈 Máx: ${method.max_amount !== null ? method.max_amount : '-'}\n\n` +
         `¿Qué campo deseas modificar?`,
@@ -1346,7 +1357,7 @@ bot.action(/edit_wit_(\d+)/, async (ctx) => {
         [Markup.button.callback('✏️ Nombre', 'edit_field_name')],
         [Markup.button.callback('✏️ Moneda', 'edit_field_currency')],
         [Markup.button.callback('✏️ Datos (card)', 'edit_field_card')],
-        [Markup.button.callback('✏️ Confirmar', 'edit_field_confirm')],
+        [Markup.button.callback('✏️ Confirmar / Red', 'edit_field_confirm')],
         [Markup.button.callback('✏️ Límite mínimo', 'edit_field_min_amount')],
         [Markup.button.callback('✏️ Límite máximo', 'edit_field_max_amount')],
         [Markup.button.callback('◀ Cancelar', 'admin_panel')]
@@ -1357,7 +1368,7 @@ bot.action(/edit_wit_(\d+)/, async (ctx) => {
         `📛 Nombre: ${escapeHTML(method.name)}\n` +
         `💱 Moneda: ${method.currency}\n` +
         `💳 Datos: ${escapeHTML(method.card)}\n` +
-        `✅ Confirmar: ${escapeHTML(method.confirm)}\n` +
+        `✅ Confirmar/Red: ${escapeHTML(method.confirm)}\n` +
         `📉 Mín: ${method.min_amount !== null ? method.min_amount : '-'}\n` +
         `📈 Máx: ${method.max_amount !== null ? method.max_amount : '-'}\n\n` +
         `¿Qué campo deseas modificar?`,
@@ -1394,7 +1405,7 @@ bot.action('edit_field_confirm', async (ctx) => {
     ctx.session.editField = 'confirm';
     ctx.session.adminAction = 'edit_method';
     ctx.session.editStep = 'awaiting_value';
-    await ctx.reply('✏️ Envía el <b>nuevo dato de confirmación</b> (red, teléfono, etc.):');
+    await ctx.reply('✏️ Envía el <b>nuevo dato de confirmación / red sugerida</b> (para cripto, la red; para otros, número a confirmar):');
     await ctx.answerCbQuery();
 });
 
@@ -1794,9 +1805,9 @@ bot.on(message('text'), async (ctx) => {
         } else if (text === '💰 Mi dinero') {
             const user = ctx.dbUser;
             const rate = await getExchangeRateUSD();
-            const cup = parseFloat(user.cup);
-            const usd = parseFloat(user.usd);
-            const bonusCup = parseFloat(user.bonus_cup);
+            const cup = parseFloat(user.cup) || 0;
+            const usd = parseFloat(user.usd) || 0;
+            const bonusCup = parseFloat(user.bonus_cup) || 0;
             const cupToUsd = (cup / rate).toFixed(2);
             const usdToCup = (usd * rate).toFixed(2);
 
@@ -1938,7 +1949,7 @@ bot.on(message('text'), async (ctx) => {
             } else if (session.adminStep === 3) {
                 session.adminTempCard = text;
                 session.adminStep = 4;
-                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
+                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación / red sugerida</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
                 return;
             } else if (session.adminStep === 4) {
                 const { data, error } = await supabase
@@ -1978,7 +1989,7 @@ bot.on(message('text'), async (ctx) => {
             } else if (session.adminStep === 3) {
                 session.adminTempCard = text;
                 session.adminStep = 4;
-                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
+                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación / red sugerida</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
                 return;
             } else if (session.adminStep === 4) {
                 const { data, error } = await supabase
@@ -2337,12 +2348,12 @@ bot.on(message('text'), async (ctx) => {
 
         let saldoSuficiente = false;
         if (currency === 'CUP') {
-            if (parseFloat(user.cup) >= amount) saldoSuficiente = true;
+            if ((parseFloat(user.cup) || 0) >= amount) saldoSuficiente = true;
         } else if (currency === 'USD') {
-            if (parseFloat(user.usd) >= amount) saldoSuficiente = true;
+            if ((parseFloat(user.usd) || 0) >= amount) saldoSuficiente = true;
         } else {
             const cupNeeded = await convertToCUP(amount, currency);
-            if (parseFloat(user.cup) >= cupNeeded) saldoSuficiente = true;
+            if ((parseFloat(user.cup) || 0) >= cupNeeded) saldoSuficiente = true;
         }
 
         if (!saldoSuficiente) {
@@ -2361,16 +2372,114 @@ bot.on(message('text'), async (ctx) => {
 
         session.withdrawAmount = amount;
         session.withdrawCurrency = currency;
-        session.awaitingWithdrawAccount = true;
-        delete session.awaitingWithdrawAmount;
-
-        let mensaje = `✅ Monto aceptado: ${amount} ${currency} (equivale a ${amountUSD.toFixed(2)} USD)\n\n`;
+        
+        // Dependiendo de la moneda, pedimos los datos de la cuenta
         if (currency === 'USDT' || currency === 'TRX') {
-            mensaje += 'Por favor, escribe tu <b>dirección de wallet</b> y la <b>red</b> (ej: TRC-20 para USDT).';
+            session.awaitingWithdrawWallet = true; // Nuevo estado para pedir wallet
+            delete session.awaitingWithdrawAmount;
+            await ctx.reply(
+                `✅ Monto aceptado: ${amount} ${currency} (equivale a ${amountUSD.toFixed(2)} USD)\n\n` +
+                `Por favor, escribe tu <b>dirección de wallet</b> para recibir el retiro.\n` +
+                `(Ejemplo: TXYZ... o 0x... según la red)`,
+                { parse_mode: 'HTML' }
+            );
         } else {
-            mensaje += 'Por favor, escribe los <b>datos de tu cuenta</b> (número, teléfono, etc.) para recibir el retiro.';
+            session.awaitingWithdrawAccount = true;
+            delete session.awaitingWithdrawAmount;
+            await ctx.reply(
+                `✅ Monto aceptado: ${amount} ${currency} (equivale a ${amountUSD.toFixed(2)} USD)\n\n` +
+                `Por favor, escribe los <b>datos de tu cuenta</b> (número de teléfono, tarjeta, etc.) para recibir el retiro.`,
+                { parse_mode: 'HTML' }
+            );
         }
-        await ctx.reply(mensaje, { parse_mode: 'HTML' });
+        return;
+    }
+
+    if (session.awaitingWithdrawWallet) {
+        // Primero recibimos la wallet
+        const wallet = text.trim();
+        if (!wallet) {
+            await ctx.reply('❌ La dirección no puede estar vacía. Por favor, ingresa una dirección válida.', getMainKeyboard(ctx));
+            return;
+        }
+        session.withdrawWallet = wallet;
+        delete session.awaitingWithdrawWallet;
+        session.awaitingWithdrawNetwork = true; // Ahora pedimos la red
+        await ctx.reply(
+            `✅ Dirección guardada: ${escapeHTML(wallet)}\n\n` +
+            `Ahora, por favor, escribe la <b>red</b> que usarás (ej: TRC-20, BEP-20, etc.).\n` +
+            `Si el método sugiere una red (${escapeHTML(session.withdrawMethod.confirm)}), asegúrate de coincidir.`,
+            { parse_mode: 'HTML' }
+        );
+        return;
+    }
+
+    if (session.awaitingWithdrawNetwork) {
+        const network = text.trim();
+        if (!network) {
+            await ctx.reply('❌ La red no puede estar vacía. Por favor, ingresa la red.', getMainKeyboard(ctx));
+            return;
+        }
+        const wallet = session.withdrawWallet;
+        const amount = session.withdrawAmount;
+        const currency = session.withdrawCurrency;
+        const method = session.withdrawMethod;
+
+        const accountInfo = `Wallet: ${wallet} (Red: ${network})`;
+
+        try {
+            const { data: request, error } = await supabase
+                .from('withdraw_requests')
+                .insert({
+                    user_id: uid,
+                    method_id: method.id,
+                    amount: amount,
+                    currency: currency,
+                    account_info: accountInfo,
+                    status: 'pending'
+                })
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            for (const adminId of ADMIN_IDS) {
+                try {
+                    await bot.telegram.sendMessage(adminId,
+                        `📤 <b>Nueva solicitud de RETIRO (cripto)</b>\n` +
+                        `👤 Usuario: ${ctx.from.first_name} (${uid})\n` +
+                        `💰 Monto: ${amount} ${currency}\n` +
+                        `🏦 Método: ${escapeHTML(method.name)}\n` +
+                        `📞 Datos: ${escapeHTML(accountInfo)}\n` +
+                        `🆔 Solicitud: ${request.id}`,
+                        {
+                            parse_mode: 'HTML',
+                            reply_markup: Markup.inlineKeyboard([
+                                [Markup.button.callback('✅ Aprobar', `approve_withdraw_${request.id}`),
+                                 Markup.button.callback('❌ Rechazar', `reject_withdraw_${request.id}`)]
+                            ]).reply_markup
+                        }
+                    );
+                } catch (e) {}
+            }
+            await ctx.reply(
+                `✅ <b>Solicitud de retiro enviada</b>\n` +
+                `💰 Monto: ${amount} ${currency}\n` +
+                `📞 Wallet: ${escapeHTML(wallet)}\n` +
+                `🔗 Red: ${escapeHTML(network)}\n` +
+                `⏳ Procesaremos tu solicitud a la mayor brevedad.`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {
+            console.error(e);
+            await ctx.reply(`❌ Error al crear la solicitud: ${e.message}`, getMainKeyboard(ctx));
+        }
+
+        delete session.withdrawWallet;
+        delete session.awaitingWithdrawNetwork;
+        delete session.withdrawMethod;
+        delete session.withdrawAmount;
+        delete session.withdrawCurrency;
         return;
     }
 
@@ -2382,12 +2491,12 @@ bot.on(message('text'), async (ctx) => {
 
         let saldoSuficiente = false;
         if (currency === 'CUP') {
-            if (parseFloat(user.cup) >= amount) saldoSuficiente = true;
+            if ((parseFloat(user.cup) || 0) >= amount) saldoSuficiente = true;
         } else if (currency === 'USD') {
-            if (parseFloat(user.usd) >= amount) saldoSuficiente = true;
+            if ((parseFloat(user.usd) || 0) >= amount) saldoSuficiente = true;
         } else {
             const cupNeeded = await convertToCUP(amount, currency);
-            if (parseFloat(user.cup) >= cupNeeded) saldoSuficiente = true;
+            if ((parseFloat(user.cup) || 0) >= cupNeeded) saldoSuficiente = true;
         }
 
         if (!saldoSuficiente) {
@@ -2496,7 +2605,7 @@ bot.on(message('text'), async (ctx) => {
         await ctx.reply(
             `✅ Usuario encontrado: ${escapeHTML(displayName)}\n\n` +
             `Ahora envía el <b>monto y la moneda</b> que deseas transferir (ej: <code>500 cup</code>, <code>10 usd</code>).\n` +
-            `💰 Tus saldos: CUP: ${parseFloat(user.cup).toFixed(2)}, USD: ${parseFloat(user.usd).toFixed(2)}`,
+            `💰 Tus saldos: CUP: ${(parseFloat(user.cup) || 0).toFixed(2)}, USD: ${(parseFloat(user.usd) || 0).toFixed(2)}`,
             { parse_mode: 'HTML' }
         );
         return;
@@ -2520,9 +2629,9 @@ bot.on(message('text'), async (ctx) => {
 
         let saldoOrigen = 0;
         if (currency === 'CUP') {
-            saldoOrigen = parseFloat(user.cup);
+            saldoOrigen = parseFloat(user.cup) || 0;
         } else {
-            saldoOrigen = parseFloat(user.usd);
+            saldoOrigen = parseFloat(user.usd) || 0;
         }
         if (saldoOrigen < amount) {
             await ctx.reply(`❌ No tienes suficiente saldo en ${currency}. Disponible: ${saldoOrigen.toFixed(2)} ${currency}`, getMainKeyboard(ctx));
@@ -2532,12 +2641,12 @@ bot.on(message('text'), async (ctx) => {
         if (currency === 'CUP') {
             await supabase
                 .from('users')
-                .update({ cup: parseFloat(user.cup) - amount, updated_at: new Date() })
+                .update({ cup: (parseFloat(user.cup) || 0) - amount, updated_at: new Date() })
                 .eq('telegram_id', uid);
         } else {
             await supabase
                 .from('users')
-                .update({ usd: parseFloat(user.usd) - amount, updated_at: new Date() })
+                .update({ usd: (parseFloat(user.usd) || 0) - amount, updated_at: new Date() })
                 .eq('telegram_id', uid);
         }
 
@@ -2550,12 +2659,12 @@ bot.on(message('text'), async (ctx) => {
         if (currency === 'CUP') {
             await supabase
                 .from('users')
-                .update({ cup: parseFloat(targetUser.cup) + amount, updated_at: new Date() })
+                .update({ cup: (parseFloat(targetUser.cup) || 0) + amount, updated_at: new Date() })
                 .eq('telegram_id', targetId);
         } else {
             await supabase
                 .from('users')
-                .update({ usd: parseFloat(targetUser.usd) + amount, updated_at: new Date() })
+                .update({ usd: (parseFloat(targetUser.usd) || 0) + amount, updated_at: new Date() })
                 .eq('telegram_id', targetId);
         }
 
@@ -2653,9 +2762,9 @@ bot.on(message('text'), async (ctx) => {
             }
         }
 
-        let newUsd = parseFloat(user.usd);
-        let newBonus = parseFloat(user.bonus_cup);
-        let newCup = parseFloat(user.cup);
+        let newUsd = parseFloat(user.usd) || 0;
+        let newBonus = parseFloat(user.bonus_cup) || 0;
+        let newCup = parseFloat(user.cup) || 0;
 
         if (totalUSD > 0) {
             const rate = await getExchangeRateUSD();
@@ -2794,7 +2903,7 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
             .eq('telegram_id', request.user_id)
             .single();
 
-        const newCup = parseFloat(user.cup) + amountCUP;
+        const newCup = (parseFloat(user.cup) || 0) + amountCUP;
 
         await supabase
             .from('users')
@@ -2879,14 +2988,14 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
 
         const amountCUP = await convertToCUP(request.amount, request.currency);
 
-        if (parseFloat(user.cup) < amountCUP) {
+        if ((parseFloat(user.cup) || 0) < amountCUP) {
             await ctx.reply('❌ El usuario ya no tiene saldo suficiente para este retiro.');
             return;
         }
 
         await supabase
             .from('users')
-            .update({ cup: parseFloat(user.cup) - amountCUP, updated_at: new Date() })
+            .update({ cup: (parseFloat(user.cup) || 0) - amountCUP, updated_at: new Date() })
             .eq('telegram_id', request.user_id);
 
         await supabase
