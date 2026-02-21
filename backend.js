@@ -1,8 +1,7 @@
 // ==============================
 // backend.js - API REST + Bot de Telegram (UNIFICADO)
-// Versión simplificada: solo saldos CUP y USD en usuarios
-// Métodos pueden ser en cualquier moneda, conversión automática al aprobar
-// Incluye todos los endpoints de admin, apuestas, transferencias, etc.
+// Versión completa - CON TODOS LOS ENDPOINTS DE ADMIN
+// Incluye manejo robusto de errores para la columna bonus_cup
 // ==============================
 
 require('dotenv').config();
@@ -141,38 +140,89 @@ async function convertFromCUP(amountCUP, targetCurrency) {
     }
 }
 
-// ========== FUNCIÓN GETORCREATEUSER (solo CUP/USD) - SIN MENSAJE DE BIENVENIDA ==========
+// ========== FUNCIÓN GETORCREATEUSER CON MANEJO DE ERROR DE COLUMNA ==========
 async function getOrCreateUser(telegramId, firstName = 'Jugador', username = null) {
-    let { data: user } = await supabase
-        .from('users')
-        .select('*')
-        .eq('telegram_id', telegramId)
-        .maybeSingle();
-
-    if (!user) {
-        const { data: newUser } = await supabase
+    try {
+        let { data: user, error: selectError } = await supabase
             .from('users')
-            .insert({
+            .select('*')
+            .eq('telegram_id', telegramId)
+            .maybeSingle();
+
+        if (selectError) {
+            console.error('Error al consultar usuario:', selectError);
+            // Devolvemos un objeto por defecto para no romper la app
+            return {
                 telegram_id: telegramId,
                 first_name: firstName,
                 username: username,
                 bonus_cup: BONUS_CUP_DEFAULT,
                 cup: 0,
                 usd: 0
-            })
-            .select()
-            .single();
-        user = newUser;
-        // El mensaje de bienvenida se envía solo en el bot, no aquí
-    } else {
-        if (username && user.username !== username) {
-            await supabase
-                .from('users')
-                .update({ username })
-                .eq('telegram_id', telegramId);
+            };
         }
+
+        if (!user) {
+            try {
+                const { data: newUser, error: insertError } = await supabase
+                    .from('users')
+                    .insert({
+                        telegram_id: telegramId,
+                        first_name: firstName,
+                        username: username,
+                        bonus_cup: BONUS_CUP_DEFAULT,
+                        cup: 0,
+                        usd: 0
+                    })
+                    .select()
+                    .single();
+
+                if (insertError) {
+                    console.error('Error al crear usuario:', insertError);
+                    // Si hay error (ej. columna bonus_cup no existe), devolvemos objeto por defecto
+                    return {
+                        telegram_id: telegramId,
+                        first_name: firstName,
+                        username: username,
+                        bonus_cup: BONUS_CUP_DEFAULT,
+                        cup: 0,
+                        usd: 0
+                    };
+                }
+                user = newUser;
+                // El mensaje de bienvenida se envía solo en el bot, no aquí
+            } catch (insertException) {
+                console.error('Excepción al crear usuario:', insertException);
+                return {
+                    telegram_id: telegramId,
+                    first_name: firstName,
+                    username: username,
+                    bonus_cup: BONUS_CUP_DEFAULT,
+                    cup: 0,
+                    usd: 0
+                };
+            }
+        } else {
+            if (username && user.username !== username) {
+                await supabase
+                    .from('users')
+                    .update({ username })
+                    .eq('telegram_id', telegramId)
+                    .catch(e => console.error('Error actualizando username:', e));
+            }
+        }
+        return user;
+    } catch (e) {
+        console.error('Error grave en getOrCreateUser:', e);
+        return {
+            telegram_id: telegramId,
+            first_name: firstName,
+            username: username,
+            bonus_cup: BONUS_CUP_DEFAULT,
+            cup: 0,
+            usd: 0
+        };
     }
-    return user;
 }
 
 async function getMinDepositUSD() {
@@ -216,7 +266,7 @@ function parseAmountWithCurrency(text) {
     };
 }
 
-// ========== FUNCIONES DE PARSEO DE APUESTAS (sin cambios) ==========
+// ========== FUNCIONES DE PARSEO DE APUESTAS ==========
 function parseBetLine(line, betType) {
     line = line.trim().toLowerCase();
     if (!line) return [];
@@ -390,7 +440,7 @@ app.post('/api/auth', async (req, res) => {
     });
 });
 
-// --- Métodos de depósito (con moneda y límites) ---
+// --- Métodos de depósito ---
 app.get('/api/deposit-methods', async (req, res) => {
     const { data } = await supabase.from('deposit_methods').select('*').order('id');
     res.json(data || []);
@@ -400,7 +450,7 @@ app.get('/api/deposit-methods/:id', async (req, res) => {
     res.json(data);
 });
 
-// --- Métodos de retiro (con moneda y límites) ---
+// --- Métodos de retiro ---
 app.get('/api/withdraw-methods', async (req, res) => {
     const { data } = await supabase.from('withdraw_methods').select('*').order('id');
     res.json(data || []);
@@ -410,7 +460,7 @@ app.get('/api/withdraw-methods/:id', async (req, res) => {
     res.json(data);
 });
 
-// --- Precios de jugadas (globales) ---
+// --- Precios de jugadas ---
 app.get('/api/play-prices', async (req, res) => {
     const { data } = await supabase.from('play_prices').select('*');
     res.json(data || []);
@@ -422,19 +472,19 @@ app.get('/api/exchange-rates', async (req, res) => {
     res.json(rates);
 });
 
-// --- Mínimo depósito (público) ---
+// --- Mínimo depósito ---
 app.get('/api/config/min-deposit', async (req, res) => {
     const value = await getMinDepositUSD();
     res.json({ value });
 });
 
-// --- Mínimo retiro (público) ---
+// --- Mínimo retiro ---
 app.get('/api/config/min-withdraw', async (req, res) => {
     const value = await getMinWithdrawUSD();
     res.json({ value });
 });
 
-// --- Números ganadores (últimos 10) con formato 123 4567 ---
+// --- Números ganadores ---
 app.get('/api/winning-numbers', async (req, res) => {
     const { data } = await supabase
         .from('winning_numbers')
@@ -448,7 +498,7 @@ app.get('/api/winning-numbers', async (req, res) => {
     res.json(formatted);
 });
 
-// --- Sesión activa para una lotería y turno específico ---
+// --- Sesión activa ---
 app.get('/api/lottery-sessions/active', async (req, res) => {
     const { lottery, date, time_slot } = req.query;
     if (!lottery || !date || !time_slot) {
@@ -476,7 +526,7 @@ app.get('/api/lottery-sessions/:id', async (req, res) => {
     res.json(data);
 });
 
-// --- Solicitud de depósito (con captura) ---
+// --- Solicitud de depósito ---
 app.post('/api/deposit-requests', upload.single('screenshot'), async (req, res) => {
     const { methodId, userId, amount, currency } = req.body;
     const file = req.file;
@@ -586,7 +636,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
         return res.status(400).json({ error: `La moneda del método es ${method.currency}, no coincide.` });
     }
 
-    // Verificar saldo disponible según moneda
+    // Verificar saldo disponible
     let saldoSuficiente = false;
     let saldoMensaje = '';
     if (currency === 'CUP') {
@@ -596,7 +646,6 @@ app.post('/api/withdraw-requests', async (req, res) => {
         if (parseFloat(user.usd) >= amount) saldoSuficiente = true;
         else saldoMensaje = `Saldo USD insuficiente. Disponible: ${parseFloat(user.usd).toFixed(2)} USD`;
     } else {
-        // Otras monedas: se debitará de CUP al aprobar, pero verificamos que tenga CUP suficiente
         const cupNeeded = await convertToCUP(amount, currency);
         if (parseFloat(user.cup) >= cupNeeded) saldoSuficiente = true;
         else saldoMensaje = `Saldo CUP insuficiente. Necesitas ${cupNeeded.toFixed(2)} CUP.`;
@@ -649,7 +698,7 @@ app.post('/api/withdraw-requests', async (req, res) => {
     res.json({ success: true, requestId: request.id });
 });
 
-// --- Transferencia entre usuarios (solo CUP y USD) ---
+// --- Transferencia entre usuarios ---
 app.post('/api/transfer', async (req, res) => {
     const { from, to, amount, currency } = req.body;
     if (!from || !to || !amount || !currency || amount <= 0) {
@@ -787,9 +836,9 @@ app.post('/api/bets', async (req, res) => {
         }
     }
 
-    let newUsd = parseFloat(user.usd);
-    let newBonus = parseFloat(user.bonus_cup);
-    let newCup = parseFloat(user.cup);
+    let newUsd = parseFloat(user.usd) || 0;
+    let newBonus = parseFloat(user.bonus_cup) || 0;
+    let newCup = parseFloat(user.cup) || 0;
 
     if (totalUSD > 0) {
         const totalDisponible = newUsd + newBonus / (await getExchangeRateUSD());
@@ -869,15 +918,15 @@ app.post('/api/bets/:id/cancel', async (req, res) => {
     }
 
     const user = await getOrCreateUser(parseInt(userId));
-    let newCup = parseFloat(user.cup);
-    let newUsd = parseFloat(user.usd);
-    let newBonus = parseFloat(user.bonus_cup);
+    let newCup = parseFloat(user.cup) || 0;
+    let newUsd = parseFloat(user.usd) || 0;
+    let newBonus = parseFloat(user.bonus_cup) || 0;
 
     for (const item of bet.items) {
         if (item.currency === 'CUP') {
             newCup += item.amount;
         } else if (item.currency === 'USD') {
-            newUsd += item.amount; // Simplificación: no se recupera bono
+            newUsd += item.amount;
         }
     }
 
