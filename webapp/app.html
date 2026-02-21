@@ -419,7 +419,7 @@
                         <!-- Campos adicionales para criptomonedas -->
                         <div id="cryptoFields" class="crypto-fields hidden">
                             <input type="text" id="withdrawWallet" placeholder="Dirección de wallet" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-2">
-                            <input type="text" id="withdrawNetwork" placeholder="Red (ej: TRC-20, BEP-20)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-2">
+                            <input type="text" id="withdrawNetwork" placeholder="Red (obligatorio: TRC-20, BEP-20, etc.)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-2">
                         </div>
                         
                         <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-3 rounded-xl font-semibold hover:bg-pink-700">Solicitar retiro</button>
@@ -1087,9 +1087,9 @@
                             if (currency === 'USDT' || currency === 'TRX') {
                                 cryptoFields.classList.remove('hidden');
                                 if (method.confirm && method.confirm !== 'ninguno') {
-                                    withdrawNetwork.placeholder = `Ej: ${method.confirm}`;
+                                    withdrawNetwork.placeholder = `Red (obligatorio: ${method.confirm})`;
                                 } else {
-                                    withdrawNetwork.placeholder = 'Red (ej: TRC-20, BEP-20)';
+                                    withdrawNetwork.placeholder = 'Red (obligatorio: TRC-20, BEP-20, etc.)';
                                 }
                             } else {
                                 cryptoFields.classList.add('hidden');
@@ -1494,7 +1494,7 @@
             iziToast.success({ message: 'Enlace copiado' });
         });
 
-        // ========== FUNCIONES DE ADMIN (completas del segundo bloque) ==========
+        // ========== FUNCIONES DE ADMIN (completas) ==========
 
         async function renderSessionsView() {
             const today = new Date().toISOString().split('T')[0];
@@ -2147,17 +2147,136 @@
 
         async function renderPendingRequestsView() {
             try {
-                // Aquí se implementaría la lógica para mostrar solicitudes pendientes
-                // Por ahora, un placeholder funcional
-                adminViewContainer.innerHTML = `
-                    <h4 class="text-xl font-semibold mb-4">⏳ Solicitudes Pendientes</h4>
-                    <p class="text-center text-gray-400">Funcionalidad en desarrollo. Pronto podrás gestionar depósitos y retiros desde aquí.</p>
-                `;
+                // Llamada real a la API para obtener solicitudes pendientes
+                const [depRes, witRes] = await Promise.all([
+                    fetch(`/api/admin/deposit-requests/pending?userId=${currentUser.telegram_id}`),
+                    fetch(`/api/admin/withdraw-requests/pending?userId=${currentUser.telegram_id}`)
+                ]);
+                const depRequests = depRes.ok ? await depRes.json() : [];
+                const witRequests = witRes.ok ? await witRes.json() : [];
+
+                let html = `<h4 class="text-xl font-semibold mb-4">⏳ Solicitudes Pendientes</h4>`;
+
+                // Depósitos
+                html += `<h5 class="font-bold text-lg mt-4 mb-2">📥 Depósitos</h5>`;
+                if (depRequests.length === 0) {
+                    html += '<p class="text-gray-400 mb-4">No hay solicitudes de depósito pendientes.</p>';
+                } else {
+                    depRequests.forEach(req => {
+                        html += `<div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold">${escapeHTML(req.user_name)} (${req.user_id})</span><br>
+                                <small>${req.amount} ${req.currency} - ${req.method_name}</small><br>
+                                <small class="text-gray-400">${new Date(req.created_at).toLocaleString()}</small>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="approveDeposit(${req.id})" class="bg-green-600 px-3 py-1 rounded-lg text-xs">✅ Aprobar</button>
+                                <button onclick="rejectDeposit(${req.id})" class="bg-red-600 px-3 py-1 rounded-lg text-xs">❌ Rechazar</button>
+                            </div>
+                        </div>`;
+                    });
+                }
+
+                // Retiros
+                html += `<h5 class="font-bold text-lg mt-4 mb-2">📤 Retiros</h5>`;
+                if (witRequests.length === 0) {
+                    html += '<p class="text-gray-400">No hay solicitudes de retiro pendientes.</p>';
+                } else {
+                    witRequests.forEach(req => {
+                        html += `<div class="bg-gray-800/70 p-3 rounded-xl mb-2 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold">${escapeHTML(req.user_name)} (${req.user_id})</span><br>
+                                <small>${req.amount} ${req.currency} - ${req.method_name}</small><br>
+                                <small>${escapeHTML(req.account_info)}</small><br>
+                                <small class="text-gray-400">${new Date(req.created_at).toLocaleString()}</small>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="approveWithdraw(${req.id})" class="bg-green-600 px-3 py-1 rounded-lg text-xs">✅ Aprobar</button>
+                                <button onclick="rejectWithdraw(${req.id})" class="bg-red-600 px-3 py-1 rounded-lg text-xs">❌ Rechazar</button>
+                            </div>
+                        </div>`;
+                    });
+                }
+
+                adminViewContainer.innerHTML = html;
             } catch (e) {
                 console.error(e);
                 adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar solicitudes.</p>';
             }
         }
+
+        // Funciones de aprobación/rechazo (deben estar implementadas en el backend)
+        window.approveDeposit = async (requestId) => {
+            if (!confirm('¿Aprobar este depósito?')) return;
+            try {
+                const res = await fetch(`/api/admin/deposit-requests/${requestId}/approve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Depósito aprobado' });
+                    renderPendingRequestsView();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        };
+
+        window.rejectDeposit = async (requestId) => {
+            if (!confirm('¿Rechazar este depósito?')) return;
+            try {
+                const res = await fetch(`/api/admin/deposit-requests/${requestId}/reject`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Depósito rechazado' });
+                    renderPendingRequestsView();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        };
+
+        window.approveWithdraw = async (requestId) => {
+            if (!confirm('¿Aprobar este retiro?')) return;
+            try {
+                const res = await fetch(`/api/admin/withdraw-requests/${requestId}/approve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Retiro aprobado' });
+                    renderPendingRequestsView();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        };
+
+        window.rejectWithdraw = async (requestId) => {
+            if (!confirm('¿Rechazar este retiro?')) return;
+            try {
+                const res = await fetch(`/api/admin/withdraw-requests/${requestId}/reject`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: 'Retiro rechazado' });
+                    renderPendingRequestsView();
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error });
+                }
+            } catch (e) { iziToast.error({ message: 'Error de conexión' }); }
+        };
 
         adminNavBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
