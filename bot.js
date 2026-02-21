@@ -1,7 +1,7 @@
 // ==============================
 // bot.js - Bot de Telegram para 4pu3$t4$_Qva
 // Versión completa con todas las funcionalidades:
-// - Registro de usuarios con bono en CUP
+// - Registro de usuarios con bono en CUP (solo una vez)
 // - Apuestas en CUP/USD (fijo, corridos, centena, parle)
 // - Depósitos y retiros multi-moneda (CUP, USD, USDT, TRX, MLC)
 // - Transferencias entre usuarios (solo CUP/USD)
@@ -25,12 +25,12 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => parseInt(id.trim())) : [];
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
-const BONUS_CUP_DEFAULT = parseFloat(process.env.BONUS_CUP_DEFAULT) || 70; // Bono en CUP
+const BONUS_CUP_DEFAULT = parseFloat(process.env.BONUS_CUP_DEFAULT) || 70;
 const TIMEZONE = process.env.TIMEZONE || 'America/Havana';
 const WEBAPP_URL = process.env.WEBAPP_URL || 'http://localhost:3000';
 
 // ========== HORARIO DE RETIROS (hora Cuba) ==========
-const WITHDRAW_HOURS = { start: 22, end: 23.5 }; // 22:00 a 23:30
+const WITHDRAW_HOURS = { start: 22, end: 23.5 };
 
 function isWithdrawTime() {
     const now = moment.tz(TIMEZONE);
@@ -100,7 +100,6 @@ async function safeEdit(ctx, text, keyboard = null) {
     }
 }
 
-// Obtener todas las tasas
 async function getExchangeRates() {
     const { data } = await supabase
         .from('exchange_rate')
@@ -125,7 +124,27 @@ async function getExchangeRateTRX() {
     return rates.rate_trx;
 }
 
-// Convertir cualquier moneda a CUP
+async function setExchangeRateUSD(rate) {
+    await supabase
+        .from('exchange_rate')
+        .update({ rate, updated_at: new Date() })
+        .eq('id', 1);
+}
+
+async function setExchangeRateUSDT(rate) {
+    await supabase
+        .from('exchange_rate')
+        .update({ rate_usdt: rate, updated_at: new Date() })
+        .eq('id', 1);
+}
+
+async function setExchangeRateTRX(rate) {
+    await supabase
+        .from('exchange_rate')
+        .update({ rate_trx: rate, updated_at: new Date() })
+        .eq('id', 1);
+}
+
 async function convertToCUP(amount, currency) {
     const rates = await getExchangeRates();
     switch (currency) {
@@ -138,7 +157,6 @@ async function convertToCUP(amount, currency) {
     }
 }
 
-// Convertir de CUP a otra moneda
 async function convertFromCUP(amountCUP, targetCurrency) {
     const rates = await getExchangeRates();
     switch (targetCurrency) {
@@ -151,19 +169,31 @@ async function convertFromCUP(amountCUP, targetCurrency) {
     }
 }
 
-// ========== FUNCIÓN GETUSER ==========
+// ========== FUNCIÓN GETUSER MEJORADA (SOLO UN MENSAJE DE BIENVENIDA) ==========
 async function getUser(telegramId, firstName = 'Jugador', username = null) {
-    let { data: user } = await supabase
-        .from('users')
-        .select('*')
-        .eq('telegram_id', telegramId)
-        .single();
-
-    if (!user) {
-        const { data: newUser } = await supabase
+    try {
+        const { data: user, error } = await supabase
             .from('users')
-            .insert({ 
-                telegram_id: telegramId, 
+            .select('*')
+            .eq('telegram_id', telegramId)
+            .maybeSingle();
+
+        if (error) {
+            console.error('Error al consultar usuario:', error);
+            return { cup: 0, usd: 0, bonus_cup: 0, first_name: firstName, username, telegram_id: telegramId };
+        }
+
+        if (user) {
+            if (username && user.username !== username) {
+                await supabase.from('users').update({ username }).eq('telegram_id', telegramId);
+            }
+            return user;
+        }
+
+        const { data: newUser, error: insertError } = await supabase
+            .from('users')
+            .insert({
+                telegram_id: telegramId,
                 first_name: firstName,
                 username: username,
                 bonus_cup: BONUS_CUP_DEFAULT,
@@ -172,22 +202,36 @@ async function getUser(telegramId, firstName = 'Jugador', username = null) {
             })
             .select()
             .single();
-        user = newUser;
 
-        try {
-            await bot.telegram.sendMessage(telegramId,
-                `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
-                `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
-                `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
-                { parse_mode: 'HTML' }
-            );
-        } catch (e) {}
-    } else {
-        if (username && user.username !== username) {
-            await supabase.from('users').update({ username }).eq('telegram_id', telegramId);
+        if (insertError) {
+            console.error('Error al crear usuario:', insertError);
+            const { data: retryUser } = await supabase
+                .from('users')
+                .select('*')
+                .eq('telegram_id', telegramId)
+                .maybeSingle();
+            if (retryUser) return retryUser;
+            return { cup: 0, usd: 0, bonus_cup: BONUS_CUP_DEFAULT, first_name: firstName, username, telegram_id: telegramId };
         }
+
+        if (newUser) {
+            try {
+                await bot.telegram.sendMessage(telegramId,
+                    `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
+                    `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
+                    `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch (e) {
+                console.error('Error enviando mensaje de bienvenida:', e);
+            }
+        }
+
+        return newUser;
+    } catch (e) {
+        console.error('Error inesperado en getUser:', e);
+        return { cup: 0, usd: 0, bonus_cup: 0, first_name: firstName, username, telegram_id: telegramId };
     }
-    return user;
 }
 
 async function getMinDepositUSD() {
@@ -253,7 +297,6 @@ function parseBetLine(line, betType) {
 
         if (betType === 'fijo') {
             if (/^\d{2}$/.test(numero)) {
-                // normal
             } else if (/^[Dd](\d)$/.test(numero)) {
                 montoReal = montoBase * 10;
                 numeroGuardado = numero.toUpperCase();
@@ -305,7 +348,6 @@ function parseBetMessage(text, betType) {
     };
 }
 
-// Mapa de regiones con emojis
 const regionMap = {
     'Florida': { key: 'florida', emoji: '🦩' },
     'Georgia': { key: 'georgia', emoji: '🍑' },
@@ -395,7 +437,6 @@ async function createDepositRequest(userId, methodId, fileBuffer, amountText, cu
     return request;
 }
 
-// ========== TECLADOS ==========
 function getMainKeyboard(ctx) {
     const buttons = [
         ['🎲 Jugar', '💰 Mi dinero'],
@@ -493,21 +534,17 @@ function getAllowedHours(lotteryKey) {
     return schedules[lotteryKey];
 }
 
-// ========== MIDDLEWARE PARA CARGAR USUARIO ==========
+// ========== MIDDLEWARE MEJORADO ==========
 bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (uid) {
         try {
             const firstName = ctx.from.first_name || 'Jugador';
             const username = ctx.from.username || null;
-            ctx.dbUser = await getUser(uid, firstName, username);
-            if (!ctx.dbUser) {
-                console.error('getUser returned null for', uid);
-                // Fallback para evitar errores
-                ctx.dbUser = { cup: 0, usd: 0, bonus_cup: 0 };
-            }
+            const user = await getUser(uid, firstName, username);
+            ctx.dbUser = user || { cup: 0, usd: 0, bonus_cup: 0 };
         } catch (e) {
-            console.error('Error cargando usuario:', e);
+            console.error('Error cargando usuario en middleware:', e);
             ctx.dbUser = { cup: 0, usd: 0, bonus_cup: 0 };
         }
     }
@@ -870,7 +907,6 @@ bot.action('withdraw', async (ctx) => {
     const rate = await getExchangeRateUSD();
     const minWithdrawCUP = (minWithdrawUSD * rate).toFixed(2);
 
-    // Verificar saldo total (cup + usd convertido)
     const totalCUP = parseFloat(user.cup) + parseFloat(user.usd) * rate;
     if (totalCUP < minWithdrawUSD * rate) {
         await ctx.answerCbQuery(`❌ Necesitas al menos ${minWithdrawCUP} CUP (o su equivalente en USD) en tu saldo real para solicitar un retiro.`, { show_alert: true });
@@ -923,7 +959,6 @@ bot.action(/wit_(\d+)/, async (ctx) => {
         saldoEnMoneda = parseFloat(user.usd);
         mensajeSaldo = `💵 USD real: ${saldoEnMoneda.toFixed(2)}`;
     } else {
-        // Para otras monedas, mostramos el equivalente en CUP
         const cupBalance = parseFloat(user.cup);
         const equivalente = await convertFromCUP(cupBalance, method.currency);
         mensajeSaldo = `💰 Tienes ${cupBalance.toFixed(2)} CUP (equivalente a ${equivalente.toFixed(2)} ${method.currency})`;
@@ -1205,7 +1240,6 @@ bot.action('adm_add_wit', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: EDITAR MÉTODOS ==========
 bot.action('adm_edit_dep', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const { data: methods } = await supabase.from('deposit_methods').select('*').order('id');
@@ -1232,7 +1266,6 @@ bot.action('adm_edit_wit', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: ELIMINAR MÉTODOS ==========
 bot.action('adm_delete_dep', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const { data: methods } = await supabase.from('deposit_methods').select('*').order('id');
@@ -1259,7 +1292,6 @@ bot.action('adm_delete_wit', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: SELECCIÓN PARA EDITAR ==========
 bot.action(/edit_dep_(\d+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const methodId = parseInt(ctx.match[1]);
@@ -1334,7 +1366,6 @@ bot.action(/edit_wit_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: SELECCIÓN DE CAMPO A EDITAR ==========
 bot.action('edit_field_name', async (ctx) => {
     ctx.session.editField = 'name';
     ctx.session.adminAction = 'edit_method';
@@ -1383,7 +1414,6 @@ bot.action('edit_field_max_amount', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: CONFIRMACIÓN PARA ELIMINAR ==========
 bot.action(/confirm_delete_dep_(\d+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const methodId = parseInt(ctx.match[1]);
@@ -1410,7 +1440,6 @@ bot.action(/confirm_delete_wit_(\d+)/, async (ctx) => {
     await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
 });
 
-// ========== ADMIN: CONFIGURAR TASAS ==========
 bot.action('adm_set_rate_usd', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const rate = await getExchangeRateUSD();
@@ -1435,7 +1464,6 @@ bot.action('adm_set_rate_trx', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: CONFIGURAR MÍNIMOS ==========
 bot.action('adm_min_deposit', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const current = await getMinDepositUSD();
@@ -1453,7 +1481,6 @@ bot.action('adm_min_withdraw', async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: CONFIGURAR PRECIOS DE JUGADAS ==========
 bot.action('adm_set_prices', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const { data: prices } = await supabase.from('play_prices').select('*');
@@ -1500,7 +1527,6 @@ bot.action(/set_min_(.+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== ADMIN: VER DATOS ==========
 bot.action('adm_view', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
     const rates = await getExchangeRates();
@@ -1528,7 +1554,6 @@ bot.action('adm_view', async (ctx) => {
     await safeEdit(ctx, text, Markup.inlineKeyboard([[Markup.button.callback('◀ Volver a Admin', 'admin_panel')]]));
 });
 
-// ========== ADMIN: PUBLICAR GANADORES ==========
 bot.action('admin_winning', async (ctx) => {
     if (!isAdmin(ctx.from.id)) return;
 
@@ -1584,7 +1609,6 @@ bot.action(/publish_win_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
 });
 
-// ========== FUNCIÓN AUXILIAR PARA FORMATEAR NÚMERO GANADOR ==========
 function formatWinningNumber(num) {
     if (!num || num.length !== 7) return num;
     return num.slice(0, 3) + ' ' + num.slice(3);
@@ -1756,7 +1780,6 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
     return true;
 }
 
-// ========== MANEJADOR DE TEXTO ==========
 bot.on(message('text'), async (ctx) => {
     const uid = ctx.from.id;
     const text = ctx.message.text.trim();
@@ -1858,7 +1881,6 @@ bot.on(message('text'), async (ctx) => {
         }
     }
 
-    // ========== ADMIN: FLUJO DE EDICIÓN ==========
     if (isAdmin(uid) && session.adminAction === 'edit_method' && session.editStep === 'awaiting_value') {
         const newValue = text;
         const methodId = session.editMethodId;
@@ -1896,7 +1918,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // ========== ADMIN: FLUJOS DE AÑADIR MÉTODOS ==========
     if (isAdmin(uid) && session.adminAction) {
         if (session.adminAction === 'add_dep') {
             if (session.adminStep === 1) {
@@ -1978,7 +1999,6 @@ bot.on(message('text'), async (ctx) => {
             }
         }
 
-        // Configurar tasas
         if (session.adminAction === 'set_rate_usd') {
             const rate = parseFloat(text.replace(',', '.'));
             if (isNaN(rate) || rate <= 0) {
@@ -2220,9 +2240,6 @@ bot.on(message('text'), async (ctx) => {
         }
     }
 
-    // ========== FLUJOS DE USUARIO ==========
-
-    // Depósito: después de la foto, esperamos el monto
     if (session.awaitingDepositAmount) {
         const amountText = text;
         const method = session.depositMethod;
@@ -2292,7 +2309,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // Retiro: después de elegir método, esperamos monto
     if (session.awaitingWithdrawAmount) {
         const amountText = text;
         const method = session.withdrawMethod;
@@ -2319,14 +2335,12 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // Verificar saldo según moneda
         let saldoSuficiente = false;
         if (currency === 'CUP') {
             if (parseFloat(user.cup) >= amount) saldoSuficiente = true;
         } else if (currency === 'USD') {
             if (parseFloat(user.usd) >= amount) saldoSuficiente = true;
         } else {
-            // Para otras monedas, verificamos el equivalente en CUP
             const cupNeeded = await convertToCUP(amount, currency);
             if (parseFloat(user.cup) >= cupNeeded) saldoSuficiente = true;
         }
@@ -2345,7 +2359,6 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // Guardar en sesión y pedir datos de cuenta
         session.withdrawAmount = amount;
         session.withdrawCurrency = currency;
         session.awaitingWithdrawAccount = true;
@@ -2367,7 +2380,6 @@ bot.on(message('text'), async (ctx) => {
         const currency = session.withdrawCurrency;
         const method = session.withdrawMethod;
 
-        // Verificar saldo nuevamente
         let saldoSuficiente = false;
         if (currency === 'CUP') {
             if (parseFloat(user.cup) >= amount) saldoSuficiente = true;
@@ -2387,7 +2399,6 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // Crear solicitud
         const { data: request, error } = await supabase
             .from('withdraw_requests')
             .insert({
@@ -2438,7 +2449,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // Transferencia
     if (session.awaitingTransferTarget) {
         let targetIdentifier = text.trim();
         if (targetIdentifier.startsWith('@')) {
@@ -2519,7 +2529,6 @@ bot.on(message('text'), async (ctx) => {
             return;
         }
 
-        // Descontar del origen
         if (currency === 'CUP') {
             await supabase
                 .from('users')
@@ -2532,7 +2541,6 @@ bot.on(message('text'), async (ctx) => {
                 .eq('telegram_id', uid);
         }
 
-        // Acreditar al destino
         const { data: targetUser } = await supabase
             .from('users')
             .select('cup, usd')
@@ -2577,7 +2585,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // Apuestas
     if (session.awaitingBet) {
         const betType = session.betType;
         const lottery = session.lottery;
@@ -2725,7 +2732,6 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    // Si no se reconoce el mensaje, ofrecer ayuda
     await ctx.reply(
         'Lo siento, no entendí ese mensaje. 😕\n\n' +
         'Por favor, utiliza los botones del menú para navegar. Si necesitas ayuda, escribe "❓ Cómo jugar".',
@@ -2733,7 +2739,6 @@ bot.on(message('text'), async (ctx) => {
     );
 });
 
-// ========== MANEJADOR DE FOTOS (DEPÓSITO) ==========
 bot.on(message('photo'), async (ctx) => {
     const uid = ctx.from.id;
     const session = ctx.session;
@@ -2756,7 +2761,6 @@ bot.on(message('photo'), async (ctx) => {
     await ctx.reply('No se esperaba una foto en este momento. Por favor, usa los botones del menú.', getMainKeyboard(ctx));
 });
 
-// ========== MANEJADORES DE APROBACIÓN/RECHAZO DE SOLICITUDES ==========
 bot.action(/approve_deposit_(\d+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) {
         await ctx.answerCbQuery('⛔ No autorizado', { show_alert: true });
@@ -2784,7 +2788,6 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
         const rates = await getExchangeRates();
         const amountCUP = await convertToCUP(parsed.amount, parsed.currency);
 
-        // Obtener usuario
         const { data: user } = await supabase
             .from('users')
             .select('cup')
@@ -2793,7 +2796,6 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
 
         const newCup = parseFloat(user.cup) + amountCUP;
 
-        // Acreditar en CUP (principal)
         await supabase
             .from('users')
             .update({ cup: newCup, updated_at: new Date() })
@@ -2804,7 +2806,6 @@ bot.action(/approve_deposit_(\d+)/, async (ctx) => {
             .update({ status: 'approved', updated_at: new Date() })
             .eq('id', requestId);
 
-        // Notificar al usuario
         await ctx.telegram.sendMessage(request.user_id,
             `✅ <b>Depósito aprobado</b>\n\n` +
             `💰 Monto depositado: ${request.amount}\n` +
@@ -2883,7 +2884,6 @@ bot.action(/approve_withdraw_(\d+)/, async (ctx) => {
             return;
         }
 
-        // Debitar de CUP
         await supabase
             .from('users')
             .update({ cup: parseFloat(user.cup) - amountCUP, updated_at: new Date() })
@@ -2932,7 +2932,6 @@ bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
     }
 });
 
-// ========== TAREAS PROGRAMADAS ==========
 async function closeExpiredSessions() {
     try {
         const now = new Date().toISOString();
@@ -3036,12 +3035,10 @@ async function withdrawNotifications() {
     }
 }
 
-// ========== CRON JOBS ==========
 cron.schedule('* * * * *', () => {
     closeExpiredSessions();
     openScheduledSessions();
     withdrawNotifications();
 }, { timezone: TIMEZONE });
 
-// ========== EXPORTAR BOT (SIN LANZAR) ==========
 module.exports = bot;
