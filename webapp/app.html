@@ -219,6 +219,15 @@
             font-size: 0.8rem;
             margin-bottom: 10px;
         }
+        .crypto-fields {
+            margin-top: 10px;
+            padding: 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 12px;
+        }
+        .crypto-fields input {
+            margin-bottom: 8px;
+        }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -385,8 +394,13 @@
                         <div id="withdrawMethodLimits" class="text-xs text-gray-400 mb-2"></div>
                         <input type="number" id="withdrawAmount" step="0.01" min="0" placeholder="Monto a retirar" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
                         <p class="text-sm text-gray-300 mb-2">Saldo disponible: <span id="withdrawAvailableBalance">0.00</span> <span id="withdrawCurrency">CUP</span></p>
-                        <!-- Aquí se mostrarán instrucciones adicionales según el método -->
-                        <div id="withdrawExtraInstructions" class="text-sm mb-3 hidden"></div>
+                        
+                        <!-- Campos adicionales para criptomonedas -->
+                        <div id="cryptoFields" class="crypto-fields hidden">
+                            <input type="text" id="withdrawWallet" placeholder="Dirección de wallet" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-2">
+                            <input type="text" id="withdrawNetwork" placeholder="Red (ej: TRC-20, BEP-20)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-2">
+                        </div>
+                        
                         <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-3 rounded-xl font-semibold hover:bg-pink-700">Solicitar retiro</button>
                     </div>
 
@@ -543,7 +557,9 @@
         const depositMethodInfo = document.getElementById('depositMethodInfo');
         const depositMethodLimits = document.getElementById('depositMethodLimits');
         const withdrawMethodLimits = document.getElementById('withdrawMethodLimits');
-        const withdrawExtraInstructions = document.getElementById('withdrawExtraInstructions');
+        const cryptoFields = document.getElementById('cryptoFields');
+        const withdrawWallet = document.getElementById('withdrawWallet');
+        const withdrawNetwork = document.getElementById('withdrawNetwork');
 
         // Funciones auxiliares
         function getCurrentCubaTime() {
@@ -910,9 +926,9 @@
 
         function updateBalanceUI() {
             if (!currentUser) return;
-            const cup = parseFloat(currentUser.cup);
-            const usd = parseFloat(currentUser.usd);
-            const bonusCup = parseFloat(currentUser.bonus_cup);
+            const cup = parseFloat(currentUser.cup) || 0;
+            const usd = parseFloat(currentUser.usd) || 0;
+            const bonusCup = parseFloat(currentUser.bonus_cup) || 0;
             
             document.getElementById('quickBalance').innerText = `${cup.toFixed(2)} CUP`;
             document.getElementById('quickBalanceUsd').innerText = `≈ ${(cup / exchangeRates.rate).toFixed(2)} USD`;
@@ -998,11 +1014,11 @@
                             const currency = method.currency || 'CUP';
                             let balance = 0;
                             switch (currency) {
-                                case 'CUP': balance = parseFloat(currentUser.cup); break;
-                                case 'USD': balance = parseFloat(currentUser.usd); break;
+                                case 'CUP': balance = parseFloat(currentUser.cup) || 0; break;
+                                case 'USD': balance = parseFloat(currentUser.usd) || 0; break;
                                 default:
                                     // Para otras monedas, mostramos el equivalente en CUP (no el saldo directo)
-                                    balance = parseFloat(currentUser.cup) / (currency === 'USDT' ? exchangeRates.rate_usdt : exchangeRates.rate_trx);
+                                    balance = (parseFloat(currentUser.cup) || 0) / (currency === 'USDT' ? exchangeRates.rate_usdt : exchangeRates.rate_trx);
                                     break;
                             }
                             withdrawAvailableBalance.innerText = balance.toFixed(2);
@@ -1018,23 +1034,25 @@
                                 withdrawMethodLimits.innerHTML = '';
                             }
 
-                            // Mostrar instrucciones adicionales para cripto
+                            // Mostrar campos adicionales para criptomonedas
                             if (currency === 'USDT' || currency === 'TRX') {
-                                withdrawExtraInstructions.innerHTML = `
-                                    <div class="crypto-warning">
-                                        <i class="fas fa-exclamation-triangle mr-1"></i>
-                                        <strong>Importante:</strong> Asegúrate de enviar a la red correcta (TRC-20 para USDT). 
-                                        Proporciona tu dirección de wallet y la red.
-                                    </div>
-                                `;
-                                withdrawExtraInstructions.classList.remove('hidden');
+                                cryptoFields.classList.remove('hidden');
+                                // Opcional: precargar la red sugerida desde method.confirm
+                                if (method.confirm && method.confirm !== 'ninguno') {
+                                    withdrawNetwork.placeholder = `Ej: ${method.confirm}`;
+                                } else {
+                                    withdrawNetwork.placeholder = 'Red (ej: TRC-20, BEP-20)';
+                                }
                             } else {
-                                withdrawExtraInstructions.classList.add('hidden');
+                                cryptoFields.classList.add('hidden');
+                                // Limpiar campos
+                                withdrawWallet.value = '';
+                                withdrawNetwork.value = '';
                             }
                         }
                     } else {
                         withdrawMethodLimits.innerHTML = '';
-                        withdrawExtraInstructions.classList.add('hidden');
+                        cryptoFields.classList.add('hidden');
                     }
                 });
             } catch (e) { 
@@ -1314,11 +1332,11 @@
             const currency = method.currency || 'CUP';
             
             let balance = 0;
-            if (currency === 'CUP') balance = parseFloat(currentUser.cup);
-            else if (currency === 'USD') balance = parseFloat(currentUser.usd);
+            if (currency === 'CUP') balance = parseFloat(currentUser.cup) || 0;
+            else if (currency === 'USD') balance = parseFloat(currentUser.usd) || 0;
             else {
                 // Para otras monedas, verificamos el equivalente en CUP
-                const cupBalance = parseFloat(currentUser.cup);
+                const cupBalance = parseFloat(currentUser.cup) || 0;
                 const requiredCUP = amount * (currency === 'USDT' ? exchangeRates.rate_usdt : exchangeRates.rate_trx);
                 if (cupBalance < requiredCUP) {
                     iziToast.warning({ message: `Saldo CUP insuficiente. Necesitas ${requiredCUP.toFixed(2)} CUP.` });
@@ -1347,8 +1365,13 @@
 
             let accountInfo = '';
             if (currency === 'USDT' || currency === 'TRX') {
-                accountInfo = prompt('Ingresa tu dirección de wallet y la red (ej: TRC-20 para USDT):');
-                if (!accountInfo) return;
+                const wallet = withdrawWallet.value.trim();
+                const network = withdrawNetwork.value.trim();
+                if (!wallet || !network) {
+                    iziToast.warning({ message: 'Debes ingresar dirección de wallet y red' });
+                    return;
+                }
+                accountInfo = `Wallet: ${wallet} (Red: ${network})`;
             } else {
                 accountInfo = prompt('Ingresa los datos de tu cuenta (número, teléfono, etc.):');
                 if (!accountInfo) return;
@@ -1387,7 +1410,7 @@
                 return;
             }
 
-            let balance = currency === 'CUP' ? parseFloat(currentUser.cup) : parseFloat(currentUser.usd);
+            let balance = currency === 'CUP' ? (parseFloat(currentUser.cup) || 0) : (parseFloat(currentUser.usd) || 0);
             if (amount > balance) {
                 iziToast.warning({ message: `Saldo insuficiente en ${currency}. Disponible: ${balance.toFixed(2)}` });
                 return;
