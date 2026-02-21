@@ -216,18 +216,26 @@ async function getUser(telegramId, firstName = 'Jugador', username = null) {
             return { cup: 0, usd: 0, bonus_cup: BONUS_CUP_DEFAULT, first_name: firstName, username, telegram_id: telegramId };
         }
 
-        if (newUser) {
-            try {
-                await bot.telegram.sendMessage(telegramId,
-                    `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
-                    `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
-                    `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
-                    { parse_mode: 'HTML' }
-                );
-            } catch (e) {
-                console.error('Error enviando mensaje de bienvenida:', e);
-            }
-        }
+if (newUser) {
+    try {
+        // Mensaje de bienvenida primero
+        await bot.telegram.sendMessage(telegramId,
+            `👋 ¡Bienvenido a 4pu3$t4$_Qva!\n\n` +
+            `Estamos encantados de tenerte aquí.`,
+            { parse_mode: 'HTML' }
+        );
+        
+        // Luego el bono
+        await bot.telegram.sendMessage(telegramId,
+            `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
+            `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
+            `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
+            { parse_mode: 'HTML' }
+        );
+    } catch (e) {
+        console.error('Error enviando mensajes de bienvenida:', e);
+    }
+}
 
         return newUser;
     } catch (e) {
