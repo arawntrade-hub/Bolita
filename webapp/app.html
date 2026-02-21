@@ -76,6 +76,27 @@
             padding: 20px;
             border: 1px solid #00ffff;
         }
+        .error-box {
+            background: #ef4444;
+            color: white;
+            padding: 20px;
+            border-radius: 16px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .error-box button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 12px;
+            margin-top: 10px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .error-box button:hover {
+            background: #2563eb;
+        }
         .status-active { color: #10b981; font-weight: bold; }
         .status-inactive { color: #6b7280; }
         .status-closed { color: #ef4444; }
@@ -183,21 +204,6 @@
         .edit-cancel-btn:hover {
             transform: scale(1.02);
         }
-        .limit-badge {
-            background: rgba(0,0,0,0.2);
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 0.75rem;
-        }
-        .currency-badge {
-            display: inline-block;
-            background: #3b82f6;
-            color: white;
-            padding: 2px 6px;
-            border-radius: 12px;
-            font-size: 0.7rem;
-            margin-left: 5px;
-        }
         .balance-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -228,13 +234,20 @@
         .crypto-fields input {
             margin-bottom: 8px;
         }
-        .error-box {
-            background: #ef4444;
-            color: white;
-            padding: 12px;
+        .limit-badge {
+            background: rgba(0,0,0,0.2);
+            padding: 2px 8px;
             border-radius: 12px;
-            text-align: center;
-            margin: 10px 0;
+            font-size: 0.75rem;
+        }
+        .currency-badge {
+            display: inline-block;
+            background: #3b82f6;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            margin-left: 5px;
         }
     </style>
 </head>
@@ -880,11 +893,18 @@
                 const initData = TG.initData;
                 if (!initData) throw new Error('No initData');
 
+                // Timeout para la petición
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 segundos
+
                 const response = await fetch('/api/auth', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ initData })
+                    body: JSON.stringify({ initData }),
+                    signal: controller.signal
                 });
+
+                clearTimeout(timeoutId);
 
                 if (!response.ok) {
                     let errorMsg = `Error ${response.status}`;
@@ -896,8 +916,14 @@
                 }
 
                 const data = await response.json();
+                
+                // Verificar que data.user existe
+                if (!data.user) {
+                    throw new Error('El servidor no devolvió datos de usuario');
+                }
+
                 currentUser = data.user;
-                isAdmin = data.isAdmin;
+                isAdmin = data.isAdmin || false;
                 exchangeRates = {
                     rate: data.exchangeRate || 110,
                     rate_usdt: data.exchangeRateUSDT || 110,
@@ -936,10 +962,12 @@
                 console.error('Error en initAuth:', e);
                 globalLoader.innerHTML = `
                     <div class="error-box">
-                        <i class="fas fa-exclamation-triangle text-3xl mb-2"></i>
-                        <p class="font-bold">Error de conexión</p>
-                        <p class="text-sm mt-2">${e.message || 'No se pudo cargar la sesión.'}</p>
-                        <button onclick="location.reload()" class="mt-4 bg-blue-600 px-4 py-2 rounded-lg text-white">Reintentar</button>
+                        <i class="fas fa-exclamation-triangle text-5xl mb-4"></i>
+                        <p class="text-xl font-bold mb-2">Error de conexión</p>
+                        <p class="text-sm mb-4">${e.message || 'No se pudo cargar la sesión.'}</p>
+                        <button onclick="location.reload()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl">
+                            <i class="fas fa-sync-alt mr-2"></i>Reintentar
+                        </button>
                     </div>
                 `;
             }
@@ -1466,7 +1494,7 @@
             iziToast.success({ message: 'Enlace copiado' });
         });
 
-        // ========== FUNCIONES DE ADMIN ==========
+        // ========== FUNCIONES DE ADMIN (completas del segundo bloque) ==========
 
         async function renderSessionsView() {
             const today = new Date().toISOString().split('T')[0];
@@ -2150,15 +2178,24 @@
             });
         });
 
+        // Iniciar autenticación
         initAuth();
 
+        // Timeout de seguridad por si la carga se demora
         setTimeout(() => {
             if (!globalLoader.classList.contains('hidden')) {
-                globalLoader.classList.add('hidden');
-                mainContent.classList.remove('hidden');
-                iziToast.error({ message: 'La aplicación se cargó con demora.' });
+                globalLoader.innerHTML = `
+                    <div class="error-box">
+                        <i class="fas fa-exclamation-triangle text-5xl mb-4"></i>
+                        <p class="text-xl font-bold mb-2">Tiempo de espera agotado</p>
+                        <p class="text-sm mb-4">El servidor no responde. Verifica tu conexión o inténtalo más tarde.</p>
+                        <button onclick="location.reload()" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl">
+                            <i class="fas fa-sync-alt mr-2"></i>Reintentar
+                        </button>
+                    </div>
+                `;
             }
-        }, 5000);
+        }, 15000); // 15 segundos
 
         function escapeHTML(str) {
             return String(str).replace(/[&<>"]/g, function(m) {
