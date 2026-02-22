@@ -1,7 +1,7 @@
 // ==============================
 // bot.js - Bot de Telegram para 4pu3$t4$_Qva
 // Versión completa con todas las funcionalidades:
-// - Registro de usuarios con bono en CUP (solo una vez)
+// - Registro de usuarios con bono en CUP (solo una vez) - AHORA PRIMERO BIENVENIDA, LUEGO BONO
 // - Apuestas en CUP/USD (fijo, corridos, centena, parle)
 // - Depósitos y retiros multi-moneda (CUP, USD, USDT, TRX, MLC)
 // - Transferencias entre usuarios (solo CUP/USD)
@@ -11,6 +11,7 @@
 // - Emojis regionales en números ganadores
 // - Corrección de NaN en bono
 // - Retiros cripto con campos separados (wallet + red)
+// - SISTEMA DE SOPORTE: los mensajes de usuarios se reenvían a admins con opción de responder
 // ==============================
 
 require('dotenv').config();
@@ -171,8 +172,8 @@ async function convertFromCUP(amountCUP, targetCurrency) {
     }
 }
 
-// ========== FUNCIÓN GETUSER MEJORADA (SOLO UN MENSAJE DE BIENVENIDA) ==========
-async function getUser(telegramId, firstName = 'Jugador', username = null) {
+// ========== FUNCIÓN GETUSER MODIFICADA (AHORA NO ENVÍA BONO DIRECTAMENTE) ==========
+async function getUser(telegramId, firstName = 'Jugador', username = null, ctx = null) {
     try {
         const { data: user, error } = await supabase
             .from('users')
@@ -216,26 +217,10 @@ async function getUser(telegramId, firstName = 'Jugador', username = null) {
             return { cup: 0, usd: 0, bonus_cup: BONUS_CUP_DEFAULT, first_name: firstName, username, telegram_id: telegramId };
         }
 
-if (newUser) {
-    try {
-        // Mensaje de bienvenida primero
-        await bot.telegram.sendMessage(telegramId,
-            `👋 ¡Bienvenido a 4pu3$t4$_Qva!\n\n` +
-            `Estamos encantados de tenerte aquí.`,
-            { parse_mode: 'HTML' }
-        );
-        
-        // Luego el bono
-        await bot.telegram.sendMessage(telegramId,
-            `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
-            `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
-            `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
-            { parse_mode: 'HTML' }
-        );
-    } catch (e) {
-        console.error('Error enviando mensajes de bienvenida:', e);
-    }
-}
+        // Si hay contexto, marcamos que es nuevo para enviar el bono después de la bienvenida
+        if (ctx && ctx.session) {
+            ctx.session.newUserBonus = true;
+        }
 
         return newUser;
     } catch (e) {
@@ -544,14 +529,15 @@ function getAllowedHours(lotteryKey) {
     return schedules[lotteryKey];
 }
 
-// ========== MIDDLEWARE MEJORADO ==========
+// ========== MIDDLEWARE MEJORADO (AHORA PASA EL CONTEXTO A GETUSER) ==========
 bot.use(async (ctx, next) => {
     const uid = ctx.from?.id;
     if (uid) {
         try {
             const firstName = ctx.from.first_name || 'Jugador';
             const username = ctx.from.username || null;
-            const user = await getUser(uid, firstName, username);
+            // Pasamos ctx para que pueda marcar nuevo usuario en sesión
+            const user = await getUser(uid, firstName, username, ctx);
             ctx.dbUser = user || { cup: 0, usd: 0, bonus_cup: 0 };
         } catch (e) {
             console.error('Error cargando usuario en middleware:', e);
@@ -577,12 +563,28 @@ bot.command('start', async (ctx) => {
         }
     }
 
+    // Mensaje de bienvenida (ahora primero)
     await safeEdit(ctx,
         `👋 ¡Hola, ${escapeHTML(firstName)}! Bienvenido a 4pu3$t4$_Qva, tu asistente de la suerte 🍀\n\n` +
         `Estamos encantados de tenerte aquí. ¿Listo para jugar y ganar? 🎲\n\n` +
         `Usa los botones del menú para explorar todas las opciones. Si tienes dudas, solo escríbenos.`,
         getMainKeyboard(ctx)
     );
+
+    // Si es un usuario nuevo, enviamos el bono después de la bienvenida
+    if (ctx.session && ctx.session.newUserBonus) {
+        try {
+            await ctx.reply(
+                `🎁 <b>¡Bono de bienvenida!</b>\n\n` +
+                `Has recibido <b>${BONUS_CUP_DEFAULT} CUP</b> como bono no retirable.\n` +
+                `Puedes usar este bono para jugar y ganar premios reales. ¡Buena suerte!`,
+                { parse_mode: 'HTML' }
+            );
+        } catch (e) {
+            console.error('Error enviando mensaje de bono:', e);
+        }
+        delete ctx.session.newUserBonus; // Limpiar bandera
+    }
 });
 
 bot.command('jugar', async (ctx) => {
@@ -1799,12 +1801,43 @@ async function processWinningNumber(sessionId, winningStr, ctx) {
     return true;
 }
 
+// ========== SISTEMA DE SOPORTE ==========
+// Acción para que un admin responda a un usuario
+bot.action(/support_reply_(\d+)/, async (ctx) => {
+    if (!isAdmin(ctx.from.id)) {
+        await ctx.answerCbQuery('⛔ No autorizado', { show_alert: true });
+        return;
+    }
+    const userId = parseInt(ctx.match[1]);
+    ctx.session.supportReplyTo = userId;
+    await ctx.reply(`✏️ Escribe ahora tu respuesta para el usuario. Se enviará cuando termines.`);
+    await ctx.answerCbQuery();
+});
+
+// ========== MANEJADOR DE TEXTO PRINCIPAL ==========
 bot.on(message('text'), async (ctx) => {
     const uid = ctx.from.id;
     const text = ctx.message.text.trim();
     const session = ctx.session;
     const user = ctx.dbUser;
 
+    // 1. Verificar si es un admin respondiendo a un usuario
+    if (isAdmin(uid) && session.supportReplyTo) {
+        const targetUserId = session.supportReplyTo;
+        try {
+            await bot.telegram.sendMessage(targetUserId,
+                `📨 <b>Respuesta de soporte:</b>\n\n${escapeHTML(text)}`,
+                { parse_mode: 'HTML' }
+            );
+            await ctx.reply('✅ Respuesta enviada al usuario.');
+        } catch (e) {
+            await ctx.reply('❌ No se pudo enviar la respuesta. El usuario podría haber bloqueado el bot.');
+        }
+        delete session.supportReplyTo;
+        return;
+    }
+
+    // 2. Verificar si es un botón del menú principal
     const mainButtons = ['🎲 Jugar', '💰 Mi dinero', '📋 Mis jugadas', '👥 Referidos', '❓ Cómo jugar', '🌐 Abrir WebApp', '🔧 Admin'];
     if (mainButtons.includes(text)) {
         if (text === '🎲 Jugar') {
@@ -1883,7 +1916,7 @@ bot.on(message('text'), async (ctx) => {
         } else if (text === '❓ Cómo jugar') {
             await safeEdit(ctx,
                 '📩 <b>¿Necesitas ayuda?</b>\n\n' +
-                'Puedes escribirnos directamente en este chat. Nuestro equipo de soporte te responderá a la mayor brevedad.\n\n' +
+                'Puedes escribirnos directamente en este chat. Tu mensaje será recibido por nuestro equipo de soporte y te responderemos a la mayor brevedad.\n\n' +
                 'También puedes consultar la sección de preguntas frecuentes en nuestra WebApp.',
                 Markup.inlineKeyboard([[Markup.button.callback('◀ Volver al inicio', 'main')]])
             );
@@ -1900,6 +1933,90 @@ bot.on(message('text'), async (ctx) => {
         }
     }
 
+    // 3. Manejo de flujos existentes (apuestas, depósitos, etc.)
+    // --- Admin: añadir método depósito ---
+    if (isAdmin(uid) && session.adminAction === 'add_dep') {
+        if (session.adminStep === 1) {
+            session.adminTempName = text;
+            session.adminStep = 2;
+            await ctx.reply('Paso 2/4: Ahora envía la <b>moneda</b> del método (CUP, USD, USDT, TRX, MLC):', { parse_mode: 'HTML' });
+            return;
+        } else if (session.adminStep === 2) {
+            const currency = text.toUpperCase();
+            if (!['CUP','USD','USDT','TRX','MLC'].includes(currency)) {
+                await ctx.reply('❌ Moneda no válida. Debe ser CUP, USD, USDT, TRX o MLC.');
+                return;
+            }
+            session.adminTempCurrency = currency;
+            session.adminStep = 3;
+            await ctx.reply('Paso 3/4: Ahora envía el <b>dato principal</b> (número de cuenta, dirección wallet, etc.):', { parse_mode: 'HTML' });
+            return;
+        } else if (session.adminStep === 3) {
+            session.adminTempCard = text;
+            session.adminStep = 4;
+            await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación / red sugerida</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
+            return;
+        } else if (session.adminStep === 4) {
+            const { data, error } = await supabase
+                .from('deposit_methods')
+                .insert({
+                    name: session.adminTempName,
+                    currency: session.adminTempCurrency,
+                    card: session.adminTempCard,
+                    confirm: text
+                })
+                .select()
+                .single();
+            if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
+            else await ctx.reply(`✅ Método de depósito <b>${escapeHTML(session.adminTempName)}</b> (${session.adminTempCurrency}) añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
+            delete session.adminAction;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+            return;
+        }
+    }
+
+    // --- Admin: añadir método retiro ---
+    if (isAdmin(uid) && session.adminAction === 'add_wit') {
+        if (session.adminStep === 1) {
+            session.adminTempName = text;
+            session.adminStep = 2;
+            await ctx.reply('Paso 2/4: Ahora envía la <b>moneda</b> del método (CUP, USD, USDT, TRX, MLC):', { parse_mode: 'HTML' });
+            return;
+        } else if (session.adminStep === 2) {
+            const currency = text.toUpperCase();
+            if (!['CUP','USD','USDT','TRX','MLC'].includes(currency)) {
+                await ctx.reply('❌ Moneda no válida. Debe ser CUP, USD, USDT, TRX o MLC.');
+                return;
+            }
+            session.adminTempCurrency = currency;
+            session.adminStep = 3;
+            await ctx.reply('Paso 3/4: Ahora envía el <b>dato principal</b> (instrucciones, número de cuenta, etc.):', { parse_mode: 'HTML' });
+            return;
+        } else if (session.adminStep === 3) {
+            session.adminTempCard = text;
+            session.adminStep = 4;
+            await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación / red sugerida</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
+            return;
+        } else if (session.adminStep === 4) {
+            const { data, error } = await supabase
+                .from('withdraw_methods')
+                .insert({
+                    name: session.adminTempName,
+                    currency: session.adminTempCurrency,
+                    card: session.adminTempCard,
+                    confirm: text
+                })
+                .select()
+                .single();
+            if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
+            else await ctx.reply(`✅ Método de retiro <b>${escapeHTML(session.adminTempName)}</b> (${session.adminTempCurrency}) añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
+            delete session.adminAction;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+            return;
+        }
+    }
+
+    // --- Admin: editar método (awaiting_value) ---
     if (isAdmin(uid) && session.adminAction === 'edit_method' && session.editStep === 'awaiting_value') {
         const newValue = text;
         const methodId = session.editMethodId;
@@ -1937,328 +2054,255 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    if (isAdmin(uid) && session.adminAction) {
-        if (session.adminAction === 'add_dep') {
-            if (session.adminStep === 1) {
-                session.adminTempName = text;
-                session.adminStep = 2;
-                await ctx.reply('Paso 2/4: Ahora envía la <b>moneda</b> del método (CUP, USD, USDT, TRX, MLC):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 2) {
-                const currency = text.toUpperCase();
-                if (!['CUP','USD','USDT','TRX','MLC'].includes(currency)) {
-                    await ctx.reply('❌ Moneda no válida. Debe ser CUP, USD, USDT, TRX o MLC.');
-                    return;
-                }
-                session.adminTempCurrency = currency;
-                session.adminStep = 3;
-                await ctx.reply('Paso 3/4: Ahora envía el <b>dato principal</b> (número de cuenta, dirección wallet, etc.):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 3) {
-                session.adminTempCard = text;
-                session.adminStep = 4;
-                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación / red sugerida</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 4) {
-                const { data, error } = await supabase
-                    .from('deposit_methods')
-                    .insert({
-                        name: session.adminTempName,
-                        currency: session.adminTempCurrency,
-                        card: session.adminTempCard,
-                        confirm: text
-                    })
-                    .select()
-                    .single();
-                if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
-                else await ctx.reply(`✅ Método de depósito <b>${escapeHTML(session.adminTempName)}</b> (${session.adminTempCurrency}) añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
-                delete session.adminAction;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-                return;
-            }
-        }
-
-        if (session.adminAction === 'add_wit') {
-            if (session.adminStep === 1) {
-                session.adminTempName = text;
-                session.adminStep = 2;
-                await ctx.reply('Paso 2/4: Ahora envía la <b>moneda</b> del método (CUP, USD, USDT, TRX, MLC):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 2) {
-                const currency = text.toUpperCase();
-                if (!['CUP','USD','USDT','TRX','MLC'].includes(currency)) {
-                    await ctx.reply('❌ Moneda no válida. Debe ser CUP, USD, USDT, TRX o MLC.');
-                    return;
-                }
-                session.adminTempCurrency = currency;
-                session.adminStep = 3;
-                await ctx.reply('Paso 3/4: Ahora envía el <b>dato principal</b> (instrucciones, número de cuenta, etc.):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 3) {
-                session.adminTempCard = text;
-                session.adminStep = 4;
-                await ctx.reply('Paso 4/4: Finalmente, envía el <b>dato de confirmación / red sugerida</b> (para cripto, la red; para otros, número a confirmar):', { parse_mode: 'HTML' });
-                return;
-            } else if (session.adminStep === 4) {
-                const { data, error } = await supabase
-                    .from('withdraw_methods')
-                    .insert({
-                        name: session.adminTempName,
-                        currency: session.adminTempCurrency,
-                        card: session.adminTempCard,
-                        confirm: text
-                    })
-                    .select()
-                    .single();
-                if (error) await ctx.reply(`❌ Error al añadir: ${error.message}`);
-                else await ctx.reply(`✅ Método de retiro <b>${escapeHTML(session.adminTempName)}</b> (${session.adminTempCurrency}) añadido correctamente con ID ${data.id}.`, { parse_mode: 'HTML' });
-                delete session.adminAction;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
-                return;
-            }
-        }
-
-        if (session.adminAction === 'set_rate_usd') {
-            const rate = parseFloat(text.replace(',', '.'));
-            if (isNaN(rate) || rate <= 0) {
-                await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 120).');
-                return;
-            }
-            await setExchangeRateUSD(rate);
-            await ctx.reply(`✅ Tasa USD/CUP actualizada: 1 USD = ${rate} CUP`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+    // --- Admin: configurar tasa USD ---
+    if (isAdmin(uid) && session.adminAction === 'set_rate_usd') {
+        const rate = parseFloat(text.replace(',', '.'));
+        if (isNaN(rate) || rate <= 0) {
+            await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 120).');
             return;
         }
+        await setExchangeRateUSD(rate);
+        await ctx.reply(`✅ Tasa USD/CUP actualizada: 1 USD = ${rate} CUP`, { parse_mode: 'HTML' });
+        delete session.adminAction;
+        await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+        return;
+    }
 
-        if (session.adminAction === 'set_rate_usdt') {
-            const rate = parseFloat(text.replace(',', '.'));
-            if (isNaN(rate) || rate <= 0) {
-                await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 110).');
-                return;
-            }
-            await setExchangeRateUSDT(rate);
-            await ctx.reply(`✅ Tasa USDT/CUP actualizada: 1 USDT = ${rate} CUP`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+    // --- Admin: configurar tasa USDT ---
+    if (isAdmin(uid) && session.adminAction === 'set_rate_usdt') {
+        const rate = parseFloat(text.replace(',', '.'));
+        if (isNaN(rate) || rate <= 0) {
+            await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 110).');
             return;
         }
+        await setExchangeRateUSDT(rate);
+        await ctx.reply(`✅ Tasa USDT/CUP actualizada: 1 USDT = ${rate} CUP`, { parse_mode: 'HTML' });
+        delete session.adminAction;
+        await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+        return;
+    }
 
-        if (session.adminAction === 'set_rate_trx') {
-            const rate = parseFloat(text.replace(',', '.'));
-            if (isNaN(rate) || rate <= 0) {
-                await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 1.5).');
-                return;
-            }
-            await setExchangeRateTRX(rate);
-            await ctx.reply(`✅ Tasa TRX/CUP actualizada: 1 TRX = ${rate} CUP`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+    // --- Admin: configurar tasa TRX ---
+    if (isAdmin(uid) && session.adminAction === 'set_rate_trx') {
+        const rate = parseFloat(text.replace(',', '.'));
+        if (isNaN(rate) || rate <= 0) {
+            await ctx.reply('❌ Número inválido. Por favor, envía un número positivo (ej: 1.5).');
             return;
         }
+        await setExchangeRateTRX(rate);
+        await ctx.reply(`✅ Tasa TRX/CUP actualizada: 1 TRX = ${rate} CUP`, { parse_mode: 'HTML' });
+        delete session.adminAction;
+        await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+        return;
+    }
 
-        if (session.adminAction === 'set_min_deposit') {
-            const value = parseFloat(text.replace(',', '.'));
-            if (isNaN(value) || value <= 0) {
-                await ctx.reply('❌ Número inválido. Envía un número positivo (ej: 5).');
-                return;
-            }
-            await setMinDepositUSD(value);
-            await ctx.reply(`✅ Mínimo de depósito actualizado a: ${value} USD (equivale a ${(value * await getExchangeRateUSD()).toFixed(2)} CUP)`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+    // --- Admin: configurar mínimo depósito ---
+    if (isAdmin(uid) && session.adminAction === 'set_min_deposit') {
+        const value = parseFloat(text.replace(',', '.'));
+        if (isNaN(value) || value <= 0) {
+            await ctx.reply('❌ Número inválido. Envía un número positivo (ej: 5).');
             return;
         }
+        await setMinDepositUSD(value);
+        await ctx.reply(`✅ Mínimo de depósito actualizado a: ${value} USD (equivale a ${(value * await getExchangeRateUSD()).toFixed(2)} CUP)`, { parse_mode: 'HTML' });
+        delete session.adminAction;
+        await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+        return;
+    }
 
-        if (session.adminAction === 'set_min_withdraw') {
-            const value = parseFloat(text.replace(',', '.'));
-            if (isNaN(value) || value <= 0) {
-                await ctx.reply('❌ Número inválido. Envía un número positivo (ej: 2).');
-                return;
-            }
-            await setMinWithdrawUSD(value);
-            await ctx.reply(`✅ Mínimo de retiro actualizado a: ${value} USD (equivale a ${(value * await getExchangeRateUSD()).toFixed(2)} CUP)`, { parse_mode: 'HTML' });
-            delete session.adminAction;
-            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+    // --- Admin: configurar mínimo retiro ---
+    if (isAdmin(uid) && session.adminAction === 'set_min_withdraw') {
+        const value = parseFloat(text.replace(',', '.'));
+        if (isNaN(value) || value <= 0) {
+            await ctx.reply('❌ Número inválido. Envía un número positivo (ej: 2).');
             return;
         }
+        await setMinWithdrawUSD(value);
+        await ctx.reply(`✅ Mínimo de retiro actualizado a: ${value} USD (equivale a ${(value * await getExchangeRateUSD()).toFixed(2)} CUP)`, { parse_mode: 'HTML' });
+        delete session.adminAction;
+        await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+        return;
+    }
 
-        if (session.adminAction === 'set_price') {
-            if (session.priceStep === 1) {
-                const multiplier = parseFloat(text.replace(',', '.'));
-                if (isNaN(multiplier) || multiplier < 0) {
-                    await ctx.reply('❌ Multiplicador inválido. Debe ser un número positivo.');
-                    return;
-                }
-                session.priceTempMultiplier = multiplier;
-                session.priceStep = 2;
-                await ctx.reply(
-                    `Paso 2/3: Ingresa el <b>monto mínimo en CUP</b> (0 = sin mínimo):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.priceStep === 2) {
-                const minCup = parseFloat(text.replace(',', '.'));
-                if (isNaN(minCup) || minCup < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                session.priceTempMinCup = minCup;
-                session.priceStep = 3;
-                await ctx.reply(
-                    `Paso 3/3: Ingresa el <b>monto mínimo en USD</b> (0 = sin mínimo):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.priceStep === 3) {
-                const minUsd = parseFloat(text.replace(',', '.'));
-                if (isNaN(minUsd) || minUsd < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                session.priceTempMinUsd = minUsd;
-                session.priceStep = 4;
-                await ctx.reply(
-                    `Paso 4/4: Ingresa el <b>monto máximo en CUP</b> (0 = sin límite):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.priceStep === 4) {
-                const maxCup = parseFloat(text.replace(',', '.'));
-                if (isNaN(maxCup) || maxCup < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                session.priceTempMaxCup = maxCup;
-                session.priceStep = 5;
-                await ctx.reply(
-                    `Paso 5/5: Ingresa el <b>monto máximo en USD</b> (0 = sin límite):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.priceStep === 5) {
-                const maxUsd = parseFloat(text.replace(',', '.'));
-                if (isNaN(maxUsd) || maxUsd < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                const betType = session.betType;
-                await supabase
-                    .from('play_prices')
-                    .update({
-                        payout_multiplier: session.priceTempMultiplier,
-                        min_cup: session.priceTempMinCup,
-                        min_usd: session.priceTempMinUsd,
-                        max_cup: session.priceTempMaxCup === 0 ? null : session.priceTempMaxCup,
-                        max_usd: maxUsd === 0 ? null : maxUsd,
-                        updated_at: new Date()
-                    })
-                    .eq('bet_type', betType);
-                await ctx.reply(
-                    `✅ Precios para <b>${betType}</b> actualizados:\n` +
-                    `🎁 Multiplicador: x${session.priceTempMultiplier}\n` +
-                    `📉 Mín: ${session.priceTempMinCup} CUP / ${session.priceTempMinUsd} USD\n` +
-                    `📈 Máx: ${session.priceTempMaxCup || '∞'} CUP / ${maxUsd || '∞'} USD`,
-                    { parse_mode: 'HTML' }
-                );
-                delete session.adminAction;
-                delete session.priceStep;
-                delete session.priceTempMultiplier;
-                delete session.priceTempMinCup;
-                delete session.priceTempMinUsd;
-                delete session.priceTempMaxCup;
-                delete session.betType;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+    // --- Admin: configurar precios (set_price) ---
+    if (isAdmin(uid) && session.adminAction === 'set_price') {
+        if (session.priceStep === 1) {
+            const multiplier = parseFloat(text.replace(',', '.'));
+            if (isNaN(multiplier) || multiplier < 0) {
+                await ctx.reply('❌ Multiplicador inválido. Debe ser un número positivo.');
                 return;
             }
-        }
-
-        if (session.adminAction === 'set_min') {
-            if (session.minStep === 1) {
-                const minCup = parseFloat(text.replace(',', '.'));
-                if (isNaN(minCup) || minCup < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                session.minTempCup = minCup;
-                session.minStep = 2;
-                await ctx.reply(
-                    `Paso 2/4: Ingresa el <b>monto mínimo en USD</b> (0 = sin mínimo):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.minStep === 2) {
-                const minUsd = parseFloat(text.replace(',', '.'));
-                if (isNaN(minUsd) || minUsd < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                session.minTempUsd = minUsd;
-                session.minStep = 3;
-                await ctx.reply(
-                    `Paso 3/4: Ingresa el <b>monto máximo en CUP</b> (0 = sin límite):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.minStep === 3) {
-                const maxCup = parseFloat(text.replace(',', '.'));
-                if (isNaN(maxCup) || maxCup < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                session.maxTempCup = maxCup;
-                session.minStep = 4;
-                await ctx.reply(
-                    `Paso 4/4: Ingresa el <b>monto máximo en USD</b> (0 = sin límite):`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            } else if (session.minStep === 4) {
-                const maxUsd = parseFloat(text.replace(',', '.'));
-                if (isNaN(maxUsd) || maxUsd < 0) {
-                    await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
-                    return;
-                }
-                const betType = session.betType;
-                await supabase
-                    .from('play_prices')
-                    .update({
-                        min_cup: session.minTempCup,
-                        min_usd: session.minTempUsd,
-                        max_cup: session.maxTempCup === 0 ? null : session.maxTempCup,
-                        max_usd: maxUsd === 0 ? null : maxUsd,
-                        updated_at: new Date()
-                    })
-                    .eq('bet_type', betType);
-                await ctx.reply(
-                    `✅ Límites para <b>${betType}</b> actualizados:\n` +
-                    `📉 Mín: ${session.minTempCup} CUP / ${session.minTempUsd} USD\n` +
-                    `📈 Máx: ${session.maxTempCup || '∞'} CUP / ${maxUsd || '∞'} USD`,
-                    { parse_mode: 'HTML' }
-                );
-                delete session.adminAction;
-                delete session.minStep;
-                delete session.minTempCup;
-                delete session.minTempUsd;
-                delete session.maxTempCup;
-                delete session.betType;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+            session.priceTempMultiplier = multiplier;
+            session.priceStep = 2;
+            await ctx.reply(
+                `Paso 2/3: Ingresa el <b>monto mínimo en CUP</b> (0 = sin mínimo):`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        } else if (session.priceStep === 2) {
+            const minCup = parseFloat(text.replace(',', '.'));
+            if (isNaN(minCup) || minCup < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
                 return;
             }
-        }
-
-        if (session.adminAction === 'winning_numbers') {
-            const sessionId = session.winningSessionId;
-            const success = await processWinningNumber(sessionId, text, ctx);
-            if (success) {
-                delete session.adminAction;
-                delete session.winningSessionId;
-                await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+            session.priceTempMinCup = minCup;
+            session.priceStep = 3;
+            await ctx.reply(
+                `Paso 3/3: Ingresa el <b>monto mínimo en USD</b> (0 = sin mínimo):`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        } else if (session.priceStep === 3) {
+            const minUsd = parseFloat(text.replace(',', '.'));
+            if (isNaN(minUsd) || minUsd < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                return;
             }
+            session.priceTempMinUsd = minUsd;
+            session.priceStep = 4;
+            await ctx.reply(
+                `Paso 4/4: Ingresa el <b>monto máximo en CUP</b> (0 = sin límite):`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        } else if (session.priceStep === 4) {
+            const maxCup = parseFloat(text.replace(',', '.'));
+            if (isNaN(maxCup) || maxCup < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                return;
+            }
+            session.priceTempMaxCup = maxCup;
+            session.priceStep = 5;
+            await ctx.reply(
+                `Paso 5/5: Ingresa el <b>monto máximo en USD</b> (0 = sin límite):`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        } else if (session.priceStep === 5) {
+            const maxUsd = parseFloat(text.replace(',', '.'));
+            if (isNaN(maxUsd) || maxUsd < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                return;
+            }
+            const betType = session.betType;
+            await supabase
+                .from('play_prices')
+                .update({
+                    payout_multiplier: session.priceTempMultiplier,
+                    min_cup: session.priceTempMinCup,
+                    min_usd: session.priceTempMinUsd,
+                    max_cup: session.priceTempMaxCup === 0 ? null : session.priceTempMaxCup,
+                    max_usd: maxUsd === 0 ? null : maxUsd,
+                    updated_at: new Date()
+                })
+                .eq('bet_type', betType);
+            await ctx.reply(
+                `✅ Precios para <b>${betType}</b> actualizados:\n` +
+                `🎁 Multiplicador: x${session.priceTempMultiplier}\n` +
+                `📉 Mín: ${session.priceTempMinCup} CUP / ${session.priceTempMinUsd} USD\n` +
+                `📈 Máx: ${session.priceTempMaxCup || '∞'} CUP / ${maxUsd || '∞'} USD`,
+                { parse_mode: 'HTML' }
+            );
+            delete session.adminAction;
+            delete session.priceStep;
+            delete session.priceTempMultiplier;
+            delete session.priceTempMinCup;
+            delete session.priceTempMinUsd;
+            delete session.priceTempMaxCup;
+            delete session.betType;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
             return;
         }
     }
 
+    // --- Admin: configurar mínimos por jugada (set_min) ---
+    if (isAdmin(uid) && session.adminAction === 'set_min') {
+        if (session.minStep === 1) {
+            const minCup = parseFloat(text.replace(',', '.'));
+            if (isNaN(minCup) || minCup < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                return;
+            }
+            session.minTempCup = minCup;
+            session.minStep = 2;
+            await ctx.reply(
+                `Paso 2/4: Ingresa el <b>monto mínimo en USD</b> (0 = sin mínimo):`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        } else if (session.minStep === 2) {
+            const minUsd = parseFloat(text.replace(',', '.'));
+            if (isNaN(minUsd) || minUsd < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                return;
+            }
+            session.minTempUsd = minUsd;
+            session.minStep = 3;
+            await ctx.reply(
+                `Paso 3/4: Ingresa el <b>monto máximo en CUP</b> (0 = sin límite):`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        } else if (session.minStep === 3) {
+            const maxCup = parseFloat(text.replace(',', '.'));
+            if (isNaN(maxCup) || maxCup < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                return;
+            }
+            session.maxTempCup = maxCup;
+            session.minStep = 4;
+            await ctx.reply(
+                `Paso 4/4: Ingresa el <b>monto máximo en USD</b> (0 = sin límite):`,
+                { parse_mode: 'HTML' }
+            );
+            return;
+        } else if (session.minStep === 4) {
+            const maxUsd = parseFloat(text.replace(',', '.'));
+            if (isNaN(maxUsd) || maxUsd < 0) {
+                await ctx.reply('❌ Monto inválido. Debe ser un número positivo o 0.');
+                return;
+            }
+            const betType = session.betType;
+            await supabase
+                .from('play_prices')
+                .update({
+                    min_cup: session.minTempCup,
+                    min_usd: session.minTempUsd,
+                    max_cup: session.maxTempCup === 0 ? null : session.maxTempCup,
+                    max_usd: maxUsd === 0 ? null : maxUsd,
+                    updated_at: new Date()
+                })
+                .eq('bet_type', betType);
+            await ctx.reply(
+                `✅ Límites para <b>${betType}</b> actualizados:\n` +
+                `📉 Mín: ${session.minTempCup} CUP / ${session.minTempUsd} USD\n` +
+                `📈 Máx: ${session.maxTempCup || '∞'} CUP / ${maxUsd || '∞'} USD`,
+                { parse_mode: 'HTML' }
+            );
+            delete session.adminAction;
+            delete session.minStep;
+            delete session.minTempCup;
+            delete session.minTempUsd;
+            delete session.maxTempCup;
+            delete session.betType;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+            return;
+        }
+    }
+
+    // --- Admin: publicar número ganador ---
+    if (isAdmin(uid) && session.adminAction === 'winning_numbers') {
+        const sessionId = session.winningSessionId;
+        const success = await processWinningNumber(sessionId, text, ctx);
+        if (success) {
+            delete session.adminAction;
+            delete session.winningSessionId;
+            await safeEdit(ctx, '🔧 <b>Panel de administración</b>', adminPanelKbd());
+        }
+        return;
+    }
+
+    // --- Flujo: depósito (awaitingDepositAmount) ---
     if (session.awaitingDepositAmount) {
         const amountText = text;
         const method = session.depositMethod;
@@ -2328,6 +2372,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // --- Flujo: retiro (awaitingWithdrawAmount) ---
     if (session.awaitingWithdrawAmount) {
         const amountText = text;
         const method = session.withdrawMethod;
@@ -2403,8 +2448,8 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // --- Flujo: retiro cripto - wallet ---
     if (session.awaitingWithdrawWallet) {
-        // Primero recibimos la wallet
         const wallet = text.trim();
         if (!wallet) {
             await ctx.reply('❌ La dirección no puede estar vacía. Por favor, ingresa una dirección válida.', getMainKeyboard(ctx));
@@ -2412,7 +2457,7 @@ bot.on(message('text'), async (ctx) => {
         }
         session.withdrawWallet = wallet;
         delete session.awaitingWithdrawWallet;
-        session.awaitingWithdrawNetwork = true; // Ahora pedimos la red
+        session.awaitingWithdrawNetwork = true;
         await ctx.reply(
             `✅ Dirección guardada: ${escapeHTML(wallet)}\n\n` +
             `Ahora, por favor, escribe la <b>red</b> que usarás (ej: TRC-20, BEP-20, etc.).\n` +
@@ -2422,6 +2467,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // --- Flujo: retiro cripto - red ---
     if (session.awaitingWithdrawNetwork) {
         const network = text.trim();
         if (!network) {
@@ -2491,6 +2537,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // --- Flujo: retiro no cripto - cuenta ---
     if (session.awaitingWithdrawAccount) {
         const accountInfo = text;
         const amount = session.withdrawAmount;
@@ -2566,6 +2613,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // --- Flujo: transferencia - destino ---
     if (session.awaitingTransferTarget) {
         let targetIdentifier = text.trim();
         if (targetIdentifier.startsWith('@')) {
@@ -2619,6 +2667,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // --- Flujo: transferencia - monto ---
     if (session.awaitingTransferAmount) {
         const parsed = parseAmountWithCurrency(text);
         if (!parsed) {
@@ -2702,6 +2751,7 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
+    // --- Flujo: apuesta (awaitingBet) ---
     if (session.awaitingBet) {
         const betType = session.betType;
         const lottery = session.lottery;
@@ -2849,13 +2899,33 @@ bot.on(message('text'), async (ctx) => {
         return;
     }
 
-    await ctx.reply(
-        'Lo siento, no entendí ese mensaje. 😕\n\n' +
-        'Por favor, utiliza los botones del menú para navegar. Si necesitas ayuda, escribe "❓ Cómo jugar".',
-        getMainKeyboard(ctx)
-    );
+    // 4. Si no hay ningún flujo activo, se trata como mensaje de soporte
+    // Solo si el usuario no es admin (para evitar que los admins se envíen soporte a sí mismos)
+    if (!isAdmin(uid)) {
+        // Reenviar a todos los admins
+        for (const adminId of ADMIN_IDS) {
+            try {
+                await bot.telegram.sendMessage(adminId,
+                    `📩 <b>Mensaje de soporte de</b> ${escapeHTML(ctx.from.first_name)} (${uid}):\n\n${escapeHTML(text)}`,
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: Markup.inlineKeyboard([
+                            [Markup.button.callback('📩 Responder', `support_reply_${uid}`)]
+                        ]).reply_markup
+                    }
+                );
+            } catch (e) {
+                console.warn(`Error enviando soporte a admin ${adminId}:`, e.message);
+            }
+        }
+        await ctx.reply('✅ Tu mensaje ha sido enviado al equipo de soporte. Te responderemos a la brevedad.');
+    } else {
+        // Si es admin y no está en modo respuesta, ignoramos (o podríamos dar un mensaje)
+        await ctx.reply('Usa los botones del menú para navegar.', getMainKeyboard(ctx));
+    }
 });
 
+// ========== MANEJADOR DE FOTOS ==========
 bot.on(message('photo'), async (ctx) => {
     const uid = ctx.from.id;
     const session = ctx.session;
@@ -2878,6 +2948,7 @@ bot.on(message('photo'), async (ctx) => {
     await ctx.reply('No se esperaba una foto en este momento. Por favor, usa los botones del menú.', getMainKeyboard(ctx));
 });
 
+// ========== APROBAR/RECHAZAR DEPÓSITOS Y RETIROS ==========
 bot.action(/approve_deposit_(\d+)/, async (ctx) => {
     if (!isAdmin(ctx.from.id)) {
         await ctx.answerCbQuery('⛔ No autorizado', { show_alert: true });
@@ -3049,6 +3120,7 @@ bot.action(/reject_withdraw_(\d+)/, async (ctx) => {
     }
 });
 
+// ========== CRON JOBS ==========
 async function closeExpiredSessions() {
     try {
         const now = new Date().toISOString();
