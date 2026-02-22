@@ -249,6 +249,33 @@
             font-size: 0.7rem;
             margin-left: 5px;
         }
+        .tab-buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .tab-button {
+            flex: 1;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(255,255,255,0.1);
+            cursor: pointer;
+            text-align: center;
+            transition: 0.2s;
+        }
+        .tab-button.active {
+            background: #3b82f6;
+            font-weight: bold;
+        }
+        .pending-item {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-left: 4px solid #fbbf24;
+        }
+        .pending-item.approved { border-left-color: #10b981; }
+        .pending-item.rejected { border-left-color: #ef4444; }
     </style>
 </head>
 <body class="p-4 md:p-6">
@@ -416,11 +443,8 @@
                         <input type="number" id="withdrawAmount" step="0.01" min="0" placeholder="Monto a retirar" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
                         <p class="text-sm text-gray-300 mb-2">Saldo disponible: <span id="withdrawAvailableBalance">0.00</span> <span id="withdrawCurrency">CUP</span></p>
                         
-                        <!-- Campos adicionales para criptomonedas -->
-                        <div id="cryptoFields" class="crypto-fields hidden">
-                            <input type="text" id="withdrawWallet" placeholder="Dirección de wallet" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-2">
-                            <input type="text" id="withdrawNetwork" placeholder="Indique la red (TRC-20, BEP-20, etc.)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-2">
-                        </div>
+                        <!-- Campos dinámicos para datos de cuenta -->
+                        <div id="withdrawAccountFields" class="space-y-3 mt-3"></div>
                         
                         <button id="submitWithdrawBtn" class="w-full bg-pink-600 py-3 rounded-xl font-semibold hover:bg-pink-700">Solicitar retiro</button>
                     </div>
@@ -579,9 +603,7 @@
         const depositMethodInfo = document.getElementById('depositMethodInfo');
         const depositMethodLimits = document.getElementById('depositMethodLimits');
         const withdrawMethodLimits = document.getElementById('withdrawMethodLimits');
-        const cryptoFields = document.getElementById('cryptoFields');
-        const withdrawWallet = document.getElementById('withdrawWallet');
-        const withdrawNetwork = document.getElementById('withdrawNetwork');
+        const withdrawAccountFields = document.getElementById('withdrawAccountFields');
 
         // Funciones auxiliares
         function getCurrentCubaTime() {
@@ -1066,7 +1088,6 @@
                                 case 'CUP': balance = parseFloat(currentUser.cup) || 0; break;
                                 case 'USD': balance = parseFloat(currentUser.usd) || 0; break;
                                 default:
-                                    // Para otras monedas, mostramos el equivalente en CUP (no el saldo directo)
                                     balance = (parseFloat(currentUser.cup) || 0) / (currency === 'USDT' ? exchangeRates.rate_usdt : exchangeRates.rate_trx);
                                     break;
                             }
@@ -1083,30 +1104,51 @@
                                 withdrawMethodLimits.innerHTML = '';
                             }
 
-                            // Mostrar campos adicionales para criptomonedas
-                            if (currency === 'USDT' || currency === 'TRX') {
-                                cryptoFields.classList.remove('hidden');
-                                // Eliminado el "Ej:" del placeholder, ahora es una instrucción directa
-                                if (method.confirm && method.confirm !== 'ninguno') {
-                                    withdrawNetwork.placeholder = `Indique la red (${method.confirm})`;
-                                } else {
-                                    withdrawNetwork.placeholder = 'Indique la red (TRC-20, BEP-20, etc.)';
-                                }
-                            } else {
-                                cryptoFields.classList.add('hidden');
-                                withdrawWallet.value = '';
-                                withdrawNetwork.value = '';
-                            }
+                            // Mostrar campos dinámicos según moneda
+                            renderWithdrawFields(method);
                         }
                     } else {
                         withdrawMethodLimits.innerHTML = '';
-                        cryptoFields.classList.add('hidden');
+                        withdrawAccountFields.innerHTML = '';
                     }
                 });
             } catch (e) { 
                 console.error('loadWithdrawMethods', e);
                 iziToast.error({ message: 'Error al cargar métodos de retiro' });
             }
+        }
+
+        function renderWithdrawFields(method) {
+            const currency = method.currency || 'CUP';
+            let html = '';
+
+            if (currency === 'USDT' || currency === 'TRX') {
+                // Cripto: wallet y red
+                html = `
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Dirección de wallet</label>
+                        <input type="text" id="withdrawWallet" placeholder="${escapeHTML(method.card) || 'Dirección de wallet'}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Red</label>
+                        <input type="text" id="withdrawNetwork" placeholder="${escapeHTML(method.confirm) || 'Indique la red (TRC-20, BEP-20, etc.)'}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500">
+                    </div>
+                `;
+            } else {
+                // Fiat: dos campos personalizados (tarjeta y confirmación)
+                html = `
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Número de tarjeta / cuenta</label>
+                        <input type="text" id="withdrawCard" placeholder="${escapeHTML(method.card) || 'Ej: 1234-5678-9012-3456'}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-1">Número a confirmar</label>
+                        <input type="text" id="withdrawConfirm" placeholder="${escapeHTML(method.confirm) || 'Ej: 1234'}" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500">
+                    </div>
+                `;
+            }
+
+            withdrawAccountFields.innerHTML = html;
         }
 
         async function loadPlayPrices() {
@@ -1409,18 +1451,24 @@
                 return;
             }
 
+            // Recoger datos de cuenta según el tipo
             let accountInfo = '';
             if (currency === 'USDT' || currency === 'TRX') {
-                const wallet = withdrawWallet.value.trim();
-                const network = withdrawNetwork.value.trim();
+                const wallet = document.getElementById('withdrawWallet')?.value.trim();
+                const network = document.getElementById('withdrawNetwork')?.value.trim();
                 if (!wallet || !network) {
                     iziToast.warning({ message: 'Debes ingresar dirección de wallet y red' });
                     return;
                 }
                 accountInfo = `Wallet: ${wallet} (Red: ${network})`;
             } else {
-                accountInfo = prompt('Ingresa los datos de tu cuenta (número, teléfono, etc.):');
-                if (!accountInfo) return;
+                const card = document.getElementById('withdrawCard')?.value.trim();
+                const confirm = document.getElementById('withdrawConfirm')?.value.trim();
+                if (!card || !confirm) {
+                    iziToast.warning({ message: 'Debes ingresar todos los datos de la cuenta' });
+                    return;
+                }
+                accountInfo = `Tarjeta: ${card} | Confirmación: ${confirm}`;
             }
 
             try {
@@ -1680,7 +1728,7 @@
             adminViewContainer.innerHTML = `
                 <h4 class="text-xl font-semibold mb-4">➕ Añadir método de RETIRO</h4>
                 <input type="text" id="witName" placeholder="Nombre" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
-                <input type="text" id="witCard" placeholder="Instrucción/número" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
+                <input type="text" id="witCard" placeholder="Instrucción/número (ej: número de tarjeta)" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
                 <input type="text" id="witConfirm" placeholder="Número a confirmar / red" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
                 <select id="witCurrency" class="w-full p-3 rounded-xl bg-gray-800 text-white border border-pink-500 mb-3">
                     <option value="CUP">CUP</option>
@@ -2147,18 +2195,154 @@
         }
 
         async function renderPendingRequestsView() {
-            try {
-                // Aquí se implementaría la lógica para mostrar solicitudes pendientes
-                // Por ahora, un placeholder funcional
-                adminViewContainer.innerHTML = `
-                    <h4 class="text-xl font-semibold mb-4">⏳ Solicitudes Pendientes</h4>
-                    <p class="text-center text-gray-400">Funcionalidad en desarrollo. Pronto podrás gestionar depósitos y retiros desde aquí.</p>
-                `;
-            } catch (e) {
-                console.error(e);
-                adminViewContainer.innerHTML = '<p class="text-red-400">Error al cargar solicitudes.</p>';
+            let html = `
+                <h4 class="text-xl font-semibold mb-4">⏳ Solicitudes Pendientes</h4>
+                <div class="tab-buttons">
+                    <div class="tab-button active" data-tab="deposits">Depósitos</div>
+                    <div class="tab-button" data-tab="withdraws">Retiros</div>
+                </div>
+                <div id="pendingTabContent" class="mt-3"></div>
+            `;
+            adminViewContainer.innerHTML = html;
+
+            const tabButtons = document.querySelectorAll('.tab-button');
+            const tabContent = document.getElementById('pendingTabContent');
+
+            async function loadTab(tab) {
+                tabButtons.forEach(btn => btn.classList.remove('active'));
+                document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+
+                if (tab === 'deposits') {
+                    try {
+                        const res = await fetch(`/api/admin/pending-deposits?userId=${currentUser.telegram_id}`);
+                        if (!res.ok) throw new Error('Error al cargar depósitos');
+                        const deposits = await res.json();
+                        if (deposits.length === 0) {
+                            tabContent.innerHTML = '<p class="text-gray-400 text-center py-4">No hay solicitudes de depósito pendientes.</p>';
+                        } else {
+                            let listHtml = '';
+                            deposits.forEach(d => {
+                                listHtml += `
+                                    <div class="pending-item" id="deposit-${d.id}">
+                                        <div class="flex justify-between items-start">
+                                            <div>
+                                                <p><strong>Usuario:</strong> ${escapeHTML(d.user_name)} (${d.user_id})</p>
+                                                <p><strong>Monto:</strong> ${d.amount} ${d.currency}</p>
+                                                <p><strong>Método:</strong> ${escapeHTML(d.method_name)}</p>
+                                                <p><strong>Captura:</strong> <a href="${d.screenshot_url}" target="_blank" class="text-cyan-400">Ver</a></p>
+                                            </div>
+                                            <div class="flex gap-2">
+                                                <button onclick="handlePending('deposit', ${d.id}, 'approve')" class="bg-green-600 px-3 py-1 rounded-lg text-sm">✅ Aprobar</button>
+                                                <button onclick="handlePending('deposit', ${d.id}, 'reject')" class="bg-red-600 px-3 py-1 rounded-lg text-sm">❌ Rechazar</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                            tabContent.innerHTML = listHtml;
+                        }
+                    } catch (e) {
+                        // Si el endpoint no existe, mostramos mensaje y datos de ejemplo
+                        console.warn('Error cargando depósitos pendientes:', e);
+                        tabContent.innerHTML = `
+                            <p class="text-yellow-300 mb-3">⚠️ Endpoint no disponible. Mostrando datos de ejemplo:</p>
+                            <div class="pending-item">
+                                <div class="flex justify-between">
+                                    <div><strong>Usuario:</strong> Juan Pérez (12345)<br><strong>Monto:</strong> 500 CUP<br><strong>Método:</strong> Transferencia Bancaria</div>
+                                    <div class="flex gap-2"><button class="bg-green-600 px-3 py-1 rounded-lg">✅ Aprobar</button><button class="bg-red-600 px-3 py-1 rounded-lg">❌ Rechazar</button></div>
+                                </div>
+                            </div>
+                            <div class="pending-item">
+                                <div class="flex justify-between">
+                                    <div><strong>Usuario:</strong> María Gómez (67890)<br><strong>Monto:</strong> 20 USDT<br><strong>Método:</strong> USDT (TRC-20)</div>
+                                    <div class="flex gap-2"><button class="bg-green-600 px-3 py-1 rounded-lg">✅ Aprobar</button><button class="bg-red-600 px-3 py-1 rounded-lg">❌ Rechazar</button></div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                } else {
+                    try {
+                        const res = await fetch(`/api/admin/pending-withdraws?userId=${currentUser.telegram_id}`);
+                        if (!res.ok) throw new Error('Error al cargar retiros');
+                        const withdraws = await res.json();
+                        if (withdraws.length === 0) {
+                            tabContent.innerHTML = '<p class="text-gray-400 text-center py-4">No hay solicitudes de retiro pendientes.</p>';
+                        } else {
+                            let listHtml = '';
+                            withdraws.forEach(w => {
+                                listHtml += `
+                                    <div class="pending-item" id="withdraw-${w.id}">
+                                        <div class="flex justify-between items-start">
+                                            <div>
+                                                <p><strong>Usuario:</strong> ${escapeHTML(w.user_name)} (${w.user_id})</p>
+                                                <p><strong>Monto:</strong> ${w.amount} ${w.currency}</p>
+                                                <p><strong>Método:</strong> ${escapeHTML(w.method_name)}</p>
+                                                <p><strong>Cuenta:</strong> ${escapeHTML(w.account_info)}</p>
+                                            </div>
+                                            <div class="flex gap-2">
+                                                <button onclick="handlePending('withdraw', ${w.id}, 'approve')" class="bg-green-600 px-3 py-1 rounded-lg text-sm">✅ Aprobar</button>
+                                                <button onclick="handlePending('withdraw', ${w.id}, 'reject')" class="bg-red-600 px-3 py-1 rounded-lg text-sm">❌ Rechazar</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            });
+                            tabContent.innerHTML = listHtml;
+                        }
+                    } catch (e) {
+                        console.warn('Error cargando retiros pendientes:', e);
+                        tabContent.innerHTML = `
+                            <p class="text-yellow-300 mb-3">⚠️ Endpoint no disponible. Mostrando datos de ejemplo:</p>
+                            <div class="pending-item">
+                                <div class="flex justify-between">
+                                    <div><strong>Usuario:</strong> Carlos Ruiz (54321)<br><strong>Monto:</strong> 50 USD<br><strong>Método:</strong> PayPal<br><strong>Cuenta:</strong> carlos@email.com</div>
+                                    <div class="flex gap-2"><button class="bg-green-600 px-3 py-1 rounded-lg">✅ Aprobar</button><button class="bg-red-600 px-3 py-1 rounded-lg">❌ Rechazar</button></div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
             }
+
+            tabButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    loadTab(btn.dataset.tab);
+                });
+            });
+
+            loadTab('deposits');
         }
+
+        window.handlePending = async (type, id, action) => {
+            const endpoint = type === 'deposit' ? `/api/admin/pending-deposits/${id}/${action}` : `/api/admin/pending-withdraws/${id}/${action}`;
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId: currentUser.telegram_id })
+                });
+                if (res.ok) {
+                    iziToast.success({ message: `Solicitud ${action === 'approve' ? 'aprobada' : 'rechazada'} correctamente` });
+                    // Recargar la pestaña activa
+                    const activeTab = document.querySelector('.tab-button.active').dataset.tab;
+                    const pendingTabContent = document.getElementById('pendingTabContent');
+                    // Simular recarga de la pestaña llamando a loadTab
+                    const tabButtons = document.querySelectorAll('.tab-button');
+                    const loadTab = async (tab) => {
+                        // Re-ejecutar la lógica de renderPendingRequestsView simplificada
+                        // En este contexto, simplemente recargamos la vista completa
+                        renderPendingRequestsView();
+                    };
+                    renderPendingRequestsView(); // Recarga completa
+                } else {
+                    const err = await res.json();
+                    iziToast.error({ message: err.error || 'Error al procesar la solicitud' });
+                }
+            } catch (e) {
+                iziToast.error({ message: 'Error de conexión' });
+                console.error(e);
+            }
+        };
 
         adminNavBtns.forEach(btn => {
             btn.addEventListener('click', (e) => {
