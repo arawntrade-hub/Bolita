@@ -1525,6 +1525,285 @@ app.post('/api/admin/winning-numbers', requireAdmin, async (req, res) => {
     res.json({ success: true, message: 'Números publicados y premios calculados' });
 });
 
+// ========== NUEVOS ENDPOINTS PARA SOLICITUDES PENDIENTES ==========
+
+// --- Listar solicitudes de depósito pendientes ---
+app.get('/api/admin/pending-deposits', requireAdmin, async (req, res) => {
+    const { data, error } = await supabase
+        .from('deposit_requests')
+        .select(`
+            id,
+            user_id,
+            amount,
+            currency,
+            screenshot_url,
+            status,
+            created_at,
+            users (first_name, username),
+            deposit_methods (name, card, confirm)
+        `)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const formatted = data.map(d => ({
+        id: d.id,
+        user_id: d.user_id,
+        user_name: d.users?.first_name || 'Desconocido',
+        username: d.users?.username,
+        amount: d.amount,
+        currency: d.currency,
+        screenshot_url: d.screenshot_url,
+        method_name: d.deposit_methods?.name,
+        method_card: d.deposit_methods?.card,
+        method_confirm: d.deposit_methods?.confirm,
+        created_at: d.created_at
+    }));
+
+    res.json(formatted);
+});
+
+// --- Aprobar solicitud de depósito ---
+app.post('/api/admin/pending-deposits/:id/approve', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { userId } = req.body; // ID del admin que aprueba
+
+    // Obtener la solicitud
+    const { data: request, error: fetchError } = await supabase
+        .from('deposit_requests')
+        .select('*')
+        .eq('id', id)
+        .eq('status', 'pending')
+        .single();
+
+    if (fetchError || !request) {
+        return res.status(404).json({ error: 'Solicitud no encontrada o ya procesada' });
+    }
+
+    // Actualizar saldo del usuario
+    const user = await getOrCreateUser(request.user_id);
+    let newCup = parseFloat(user.cup) || 0;
+    let newUsd = parseFloat(user.usd) || 0;
+    let newBonus = parseFloat(user.bonus_cup) || 0;
+
+    // Convertir el monto a CUP si es necesario (los depósitos siempre incrementan CUP o USD según la moneda)
+    if (request.currency === 'CUP') {
+        newCup += parseFloat(request.amount);
+    } else if (request.currency === 'USD') {
+        newUsd += parseFloat(request.amount);
+    } else {
+        // Para otras monedas, convertir a CUP usando la tasa actual
+        const cupAmount = await convertToCUP(parseFloat(request.amount), request.currency);
+        newCup += cupAmount;
+    }
+
+    await supabase
+        .from('users')
+        .update({ cup: newCup, usd: newUsd, updated_at: new Date() })
+        .eq('telegram_id', request.user_id);
+
+    // Marcar solicitud como aprobada
+    const { error: updateError } = await supabase
+        .from('deposit_requests')
+        .update({ status: 'approved', processed_at: new Date(), processed_by: parseInt(userId) })
+        .eq('id', id);
+
+    if (updateError) {
+        return res.status(500).json({ error: updateError.message });
+    }
+
+    // Notificar al usuario
+    try {
+        await bot.telegram.sendMessage(request.user_id,
+            `✅ <b>¡Depósito aprobado!</b>\n\n` +
+            `💰 Monto: ${request.amount} ${request.currency}\n` +
+            `📌 El saldo ya ha sido acreditado a tu cuenta.`,
+            { parse_mode: 'HTML' }
+        );
+    } catch (e) {}
+
+    res.json({ success: true });
+});
+
+// --- Rechazar solicitud de depósito ---
+app.post('/api/admin/pending-deposits/:id/reject', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    const { data: request, error: fetchError } = await supabase
+        .from('deposit_requests')
+        .select('*')
+        .eq('id', id)
+        .eq('status', 'pending')
+        .single();
+
+    if (fetchError || !request) {
+        return res.status(404).json({ error: 'Solicitud no encontrada o ya procesada' });
+    }
+
+    // Marcar como rechazada
+    const { error: updateError } = await supabase
+        .from('deposit_requests')
+        .update({ status: 'rejected', processed_at: new Date(), processed_by: parseInt(userId) })
+        .eq('id', id);
+
+    if (updateError) {
+        return res.status(500).json({ error: updateError.message });
+    }
+
+    // Notificar al usuario
+    try {
+        await bot.telegram.sendMessage(request.user_id,
+            `❌ <b>Depósito rechazado</b>\n\n` +
+            `💰 Monto: ${request.amount} ${request.currency}\n` +
+            `📌 Por favor, contacta con el administrador si tienes dudas.`,
+            { parse_mode: 'HTML' }
+        );
+    } catch (e) {}
+
+    res.json({ success: true });
+});
+
+// --- Listar solicitudes de retiro pendientes ---
+app.get('/api/admin/pending-withdraws', requireAdmin, async (req, res) => {
+    const { data, error } = await supabase
+        .from('withdraw_requests')
+        .select(`
+            id,
+            user_id,
+            amount,
+            currency,
+            account_info,
+            status,
+            created_at,
+            users (first_name, username),
+            withdraw_methods (name, card, confirm)
+        `)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false });
+
+    if (error) return res.status(500).json({ error: error.message });
+
+    const formatted = data.map(w => ({
+        id: w.id,
+        user_id: w.user_id,
+        user_name: w.users?.first_name || 'Desconocido',
+        username: w.users?.username,
+        amount: w.amount,
+        currency: w.currency,
+        account_info: w.account_info,
+        method_name: w.withdraw_methods?.name,
+        method_card: w.withdraw_methods?.card,
+        method_confirm: w.withdraw_methods?.confirm,
+        created_at: w.created_at
+    }));
+
+    res.json(formatted);
+});
+
+// --- Aprobar solicitud de retiro ---
+app.post('/api/admin/pending-withdraws/:id/approve', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    const { data: request, error: fetchError } = await supabase
+        .from('withdraw_requests')
+        .select('*')
+        .eq('id', id)
+        .eq('status', 'pending')
+        .single();
+
+    if (fetchError || !request) {
+        return res.status(404).json({ error: 'Solicitud no encontrada o ya procesada' });
+    }
+
+    // El saldo ya se verificó al crear la solicitud, así que solo marcamos como aprobado
+    // (Opcional: podríamos descontar aquí, pero ya se descontó al crear la solicitud, según tu lógica actual)
+    // En tu implementación actual, el saldo NO se descuenta al crear la solicitud, solo se verifica.
+    // Por lo tanto, al aprobar debemos descontar el saldo.
+
+    const user = await getOrCreateUser(request.user_id);
+    let newCup = parseFloat(user.cup) || 0;
+    let newUsd = parseFloat(user.usd) || 0;
+
+    if (request.currency === 'CUP') {
+        newCup -= parseFloat(request.amount);
+    } else if (request.currency === 'USD') {
+        newUsd -= parseFloat(request.amount);
+    } else {
+        const cupAmount = await convertToCUP(parseFloat(request.amount), request.currency);
+        newCup -= cupAmount;
+    }
+
+    if (newCup < 0 || newUsd < 0) {
+        return res.status(400).json({ error: 'Saldo insuficiente (posible cambio de tasa). Rechace la solicitud.' });
+    }
+
+    await supabase
+        .from('users')
+        .update({ cup: newCup, usd: newUsd, updated_at: new Date() })
+        .eq('telegram_id', request.user_id);
+
+    const { error: updateError } = await supabase
+        .from('withdraw_requests')
+        .update({ status: 'approved', processed_at: new Date(), processed_by: parseInt(userId) })
+        .eq('id', id);
+
+    if (updateError) {
+        return res.status(500).json({ error: updateError.message });
+    }
+
+    try {
+        await bot.telegram.sendMessage(request.user_id,
+            `✅ <b>¡Retiro aprobado!</b>\n\n` +
+            `💰 Monto: ${request.amount} ${request.currency}\n` +
+            `📌 Los fondos han sido enviados a tu cuenta.`,
+            { parse_mode: 'HTML' }
+        );
+    } catch (e) {}
+
+    res.json({ success: true });
+});
+
+// --- Rechazar solicitud de retiro ---
+app.post('/api/admin/pending-withdraws/:id/reject', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    const { data: request, error: fetchError } = await supabase
+        .from('withdraw_requests')
+        .select('*')
+        .eq('id', id)
+        .eq('status', 'pending')
+        .single();
+
+    if (fetchError || !request) {
+        return res.status(404).json({ error: 'Solicitud no encontrada o ya procesada' });
+    }
+
+    // Simplemente rechazar, no se modifica saldo
+    const { error: updateError } = await supabase
+        .from('withdraw_requests')
+        .update({ status: 'rejected', processed_at: new Date(), processed_by: parseInt(userId) })
+        .eq('id', id);
+
+    if (updateError) {
+        return res.status(500).json({ error: updateError.message });
+    }
+
+    try {
+        await bot.telegram.sendMessage(request.user_id,
+            `❌ <b>Retiro rechazado</b>\n\n` +
+            `💰 Monto: ${request.amount} ${request.currency}\n` +
+            `📌 Contacta con el administrador para más información.`,
+            { parse_mode: 'HTML' }
+        );
+    } catch (e) {}
+
+    res.json({ success: true });
+});
+
 // ========== SERVIDOR ESTÁTICO ==========
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'webapp', 'index.html'));
